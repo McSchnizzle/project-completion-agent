@@ -58,7 +58,8 @@ Create `.complete-agent/config.yml` in your project root:
 ```yaml
 environment:
   url: "https://staging.example.com"
-  is_production_data: false
+  is_production_data: false   # If true, safe_mode is forced ON
+  safe_mode: false            # Skip destructive actions (delete, refund)
 
 credentials:
   admin:
@@ -68,6 +69,7 @@ credentials:
 exploration:
   max_pages: 20
   same_origin_only: true
+  realtime_wait_seconds: 5
 
 github:
   create_issues: true
@@ -109,8 +111,9 @@ touch .complete-agent/audits/current/stop.flag
 
 ## Current Status
 
-**MVP 100% Complete** - All core functionality working:
+**Phases 0-7 Complete** - Full audit capability implemented:
 
+### Phase 0-2, 4: Foundation (MVP)
 - [x] Preflight checks (write access, browser, GitHub CLI, config)
 - [x] PRD parsing (features, user flows, out-of-scope items)
 - [x] Browser exploration via Claude for Chrome
@@ -118,9 +121,34 @@ touch .complete-agent/audits/current/stop.flag
 - [x] Route extraction and comparison
 - [x] Component analysis (forms, modals, auth patterns)
 - [x] Coverage metrics
-- [x] Progress tracking
+- [x] Progress tracking with queue-based estimates
 - [x] Stop flag support
-- [x] Basic finding detection (404s, errors)
+
+### Phase 3: Dashboard
+- [x] Progress file with completion estimates
+- [x] Last action timestamps
+- [x] Continue flag for pause/resume
+
+### Phase 5: Authentication
+- [x] Data safety gating (production detection, safe mode)
+- [x] Credential management with env var substitution
+- [x] Login flow with retry logic
+- [x] External verification (OAuth, email, SMS pause/resume)
+- [x] Multi-permission testing with session isolation
+
+### Phase 6: Test Execution
+- [x] Safe mode enforcement for destructive actions
+- [x] Flow execution engine
+- [x] Form testing (all control types)
+- [x] Edge case generation
+- [x] Real-time feature testing
+
+### Phase 7: Finding Generation
+- [x] Evidence collection (screenshots, console errors)
+- [x] Finding classification (severity, confidence)
+- [x] LLM critique pass for quality filtering
+- [x] Deduplication
+- [x] Privacy/screenshot retention policy
 
 ### Tested On
 
@@ -134,13 +162,13 @@ touch .complete-agent/audits/current/stop.flag
 
 See [PRD.md](./PRD.md) for full requirements and [plan.md](./plan.md) for implementation phases.
 
-### Upcoming
+### Upcoming (Phases 8-10)
 
-- Form interaction testing
-- PRD-to-feature matching
-- Automated GitHub issue creation
-- Fix verification workflow
-- Multi-permission testing (admin vs user)
+- Interactive finding review and approval
+- GitHub issue creation from approved findings
+- Fix verification (`/complete-verify gh issue #42`)
+- Regression testing
+- Checkpoint/resume for long audits
 
 ## License
 

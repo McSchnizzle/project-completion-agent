@@ -13,44 +13,44 @@
 
 ### 0.1 Write Access & Capability Detection
 
-- [ ] **0.1.0** **FIRST:** Test write access by creating/deleting temp file in project root
-- [ ] **0.1.1** Create preflight check function that runs before any audit
-- [ ] **0.1.2** Check for Claude for Chrome MCP availability by calling `mcp__claude-in-chrome__tabs_context_mcp`
-- [ ] **0.1.3** Set internal flag `browser_mode: 'mcp' | 'none'` based on detection
-- [ ] **0.1.4** Display capability summary to user:
+- [x] **0.1.0** **FIRST:** Test write access by creating/deleting temp file in project root
+- [x] **0.1.1** Create preflight check function that runs before any audit
+- [x] **0.1.2** Check for Claude for Chrome MCP availability by calling `mcp__claude-in-chrome__tabs_context_mcp`
+- [x] **0.1.3** Set internal flag `browser_mode: 'mcp' | 'none'` based on detection
+- [x] **0.1.4** Display capability summary to user:
   - "✓ Write access: confirmed"
   - "✓ Browser automation: Claude for Chrome available" OR
   - "⚠ Browser automation: unavailable, will run code-only audit"
-- [ ] **0.1.5** **Only proceed to URL prompt if browser_mode is 'mcp'** — skip URL validation for code-only audits
-- [ ] **0.1.6** Allow user to abort if capabilities are insufficient
+- [x] **0.1.5** **Only proceed to URL prompt if browser_mode is 'mcp'** — skip URL validation for code-only audits
+- [x] **0.1.6** Allow user to abort if capabilities are insufficient
 
 ### 0.2 GitHub CLI Validation
 
-- [ ] **0.2.1** Run `gh auth status` via Bash and parse output
-- [ ] **0.2.2** If not authenticated: display error with fix instructions (`gh auth login`)
-- [ ] **0.2.3** Check if current directory is a git repo with GitHub remote
-- [ ] **0.2.4** If no GitHub remote: warn that issue creation will be skipped, allow continue
-- [ ] **0.2.5** Store GitHub repo info (owner/repo) for later issue creation
+- [x] **0.2.1** Run `gh auth status` via Bash and parse output
+- [x] **0.2.2** If not authenticated: display error with fix instructions (`gh auth login`)
+- [x] **0.2.3** Check if current directory is a git repo with GitHub remote
+- [x] **0.2.4** If no GitHub remote: warn that issue creation will be skipped, allow continue
+- [x] **0.2.5** Store GitHub repo info (owner/repo) for later issue creation
 
 ### 0.3 App URL Validation
 
-- [ ] **0.3.1** Check for `.complete-agent/config.yml` in project root
-- [ ] **0.3.2** If config exists, read `environment.url`
-- [ ] **0.3.3** If no config or no URL: prompt user to provide URL via AskUserQuestion
-- [ ] **0.3.4** Verify URL is accessible (use WebFetch or curl via Bash)
-- [ ] **0.3.5** If unreachable: display error with troubleshooting tips, allow retry or abort
-- [ ] **0.3.6** Store validated URL for browser automation
+- [x] **0.3.1** Check for `.complete-agent/config.yml` in project root
+- [x] **0.3.2** If config exists, read `environment.url`
+- [x] **0.3.3** If no config or no URL: prompt user to provide URL via AskUserQuestion
+- [x] **0.3.4** Verify URL is accessible (use WebFetch or curl via Bash)
+- [x] **0.3.5** If unreachable: display error with troubleshooting tips, allow retry or abort
+- [x] **0.3.6** Store validated URL for browser automation
 
 ### 0.4 PRD Discovery & Confirmation
 
-- [ ] **0.4.1** Glob for planning docs: `**/PRD*.md`, `**/prd*.md`, `**/plan*.md`, `**/tasks*.md`
-- [ ] **0.4.2** Filter out node_modules, .git, vendor directories
-- [ ] **0.4.3** For each candidate, extract: filename, path, version (from name), frontmatter date if present
-- [ ] **0.4.4** Rank candidates: PRD > plan > tasks, higher version numbers first, newer dates first
-- [ ] **0.4.5** Present top candidate to user: "Found PRD: `PRD-v4.md`. Use this? [Yes/No/Other]"
-- [ ] **0.4.6** If user selects "Other": let them specify path
-- [ ] **0.4.7** If no PRD found: warn and ask if user wants to continue with code-only audit
-- [ ] **0.4.8** Store selected PRD path for later parsing
+- [x] **0.4.1** Glob for planning docs: `**/PRD*.md`, `**/prd*.md`, `**/plan*.md`, `**/tasks*.md`
+- [x] **0.4.2** Filter out node_modules, .git, vendor directories
+- [x] **0.4.3** For each candidate, extract: filename, path, version (from name), frontmatter date if present
+- [x] **0.4.4** Rank candidates: PRD > plan > tasks, higher version numbers first, newer dates first
+- [x] **0.4.5** Present top candidate to user: "Found PRD: `PRD-v4.md`. Use this? [Yes/No/Other]"
+- [x] **0.4.6** If user selects "Other": let them specify path
+- [x] **0.4.7** If no PRD found: warn and ask if user wants to continue with code-only audit
+- [x] **0.4.8** Store selected PRD path for later parsing
 
 ---
 
@@ -110,19 +110,19 @@
 
 ### 1.3 PRD Parsing
 
-- [ ] **1.3.1** Read the confirmed PRD file
-- [ ] **1.3.2** Parse markdown structure: extract headings, lists, code blocks
-- [ ] **1.3.3** Identify key sections:
+- [x] **1.3.1** Read the confirmed PRD file
+- [x] **1.3.2** Parse markdown structure: extract headings, lists, code blocks
+- [x] **1.3.3** Identify key sections:
   - Executive summary / description
   - Features / functional requirements
   - User flows / user stories
   - Acceptance criteria
   - Out of scope / deferred items
-- [ ] **1.3.4** Extract feature list with names and brief descriptions
-- [ ] **1.3.5** Extract user flows as list of steps
-- [ ] **1.3.6** Flag "out of scope" and "deferred" items (don't report these as missing)
-- [ ] **1.3.7** Save parsed PRD summary to `.complete-agent/audits/current/prd-summary.json`
-- [ ] **1.3.8** Display summary to user: "Found X features, Y user flows, Z deferred items"
+- [x] **1.3.4** Extract feature list with names and brief descriptions
+- [x] **1.3.5** Extract user flows as list of steps
+- [x] **1.3.6** Flag "out of scope" and "deferred" items (don't report these as missing)
+- [x] **1.3.7** Save parsed PRD summary to `.complete-agent/audits/current/prd-summary.json`
+- [x] **1.3.8** Display summary to user: "Found X features, Y user flows, Z deferred items"
 
 ---
 
@@ -247,16 +247,16 @@
 
 ### 2.4 Component Analysis (Basic)
 
-- [ ] **2.4.1** Search for form elements in code:
+- [x] **2.4.1** Search for form elements in code:
   - React: `<form`, `onSubmit`, `handleSubmit`
   - HTML: `<form action=`
-- [ ] **2.4.2** Extract form identifiers and associated routes where possible
-- [ ] **2.4.3** Search for common UI patterns:
+- [x] **2.4.2** Extract form identifiers and associated routes where possible
+- [x] **2.4.3** Search for common UI patterns:
   - Modals: `Modal`, `Dialog`, `isOpen`
   - Authentication: `login`, `logout`, `signIn`, `signOut`
   - CRUD: `create`, `update`, `delete`, `edit`
-- [ ] **2.4.4** Cross-reference with PRD features
-- [ ] **2.4.5** Save component inventory to coverage.json
+- [x] **2.4.4** Cross-reference with PRD features
+- [x] **2.4.5** Save component inventory to coverage.json
 
 ### 2.5 Coverage Summary
 
@@ -280,7 +280,7 @@
 ### After Phase 1:
 - [x] Skill is invocable via `/complete-audit`
 - [x] Project state directory exists with config
-- [ ] PRD is parsed and summarized (skipped for live test)
+- [x] PRD is parsed and summarized
 
 ### After Phase 4:
 - [x] Have visited at least the home page
@@ -308,15 +308,23 @@ The MVP is complete when:
 6. ✅ Basic findings (404s, errors) are detected and recorded
 7. ✅ Coverage summary is generated at end
 
-**MVP Status: COMPLETE** (2026-02-03)
+**MVP Status: 100% COMPLETE** (2026-02-03)
 
 ### Test Results (socials.paulrbrown.org):
-- Pages visited: 8 of 17 (47% coverage)
+- Pages visited: 8 of 17 (47% page coverage)
 - Framework detected: Next.js 14+ (App Router)
 - Routes from code: 17 pages, 14 API routes
-- Forms found: 3
+- Forms in code: 3 (login, signup, brand/new)
+- Modals/dialogs: 1 (post review)
+- PRD features: 20 extracted, mapped to routes
 - Findings: 0 (app functioning correctly)
 - Screenshots captured: 7 (1 failed due to Chrome extension issue)
+
+### All MVP Phases Complete:
+- Phase 0: Preflight checks (100%)
+- Phase 1: Foundation (100%)
+- Phase 2: Code Analysis (100%)
+- Phase 4: Browser Automation (100%)
 
 ---
 

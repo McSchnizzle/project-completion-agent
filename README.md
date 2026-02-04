@@ -1,0 +1,138 @@
+# Project Completion Agent
+
+A Claude Code skill that bridges the gap between "code complete" (~75% done) and "actually complete" (ready for real users).
+
+## What It Does
+
+The Project Completion Agent automates the tedious final stretch of software projects by:
+
+1. **Exploring your running app** like a naive or adversarial user
+2. **Comparing behavior** against your PRD specifications
+3. **Generating findings** with screenshots and reproduction steps
+4. **Creating GitHub issues** that can be fixed via existing workflows
+5. **Verifying fixes** with regression testing
+
+## Installation
+
+Copy the skill to your Claude Code skills directory:
+
+```bash
+cp -r ~/.claude/skills/complete-audit ~/.claude/skills/
+```
+
+Restart Claude Code to load the skill.
+
+## Usage
+
+### Run an Audit
+
+```
+/complete-audit
+```
+
+The agent will:
+- Detect your framework and extract routes from code
+- Open your app in Chrome (via Claude for Chrome)
+- Explore pages, capture screenshots, inventory elements
+- Compare discovered routes with code analysis
+- Report coverage metrics and any findings
+
+### Focused Audit
+
+```
+/complete-audit --focus "auth, payments"
+```
+
+### Verify a Fix
+
+```
+/complete-verify gh issue #42
+```
+
+## Configuration
+
+Create `.complete-agent/config.yml` in your project root:
+
+```yaml
+environment:
+  url: "https://staging.example.com"
+  is_production_data: false
+
+credentials:
+  admin:
+    email: "${ADMIN_EMAIL}"
+    password: "${ADMIN_PASSWORD}"
+
+exploration:
+  max_pages: 20
+  same_origin_only: true
+
+github:
+  create_issues: true
+  labels: ["audit", "completion-agent"]
+```
+
+## Requirements
+
+- [Claude Code](https://claude.ai/claude-code) CLI
+- [Claude for Chrome](https://chrome.google.com/webstore/detail/claude-for-chrome) extension (for browser automation)
+- GitHub CLI (`gh`) authenticated (for issue creation)
+
+## Output
+
+Audit results are saved to `.complete-agent/audits/{timestamp}/`:
+
+```
+.complete-agent/
+├── config.yml
+├── audits/
+│   ├── 2026-02-03T16-46-31/
+│   │   ├── progress.md          # Audit progress and status
+│   │   ├── coverage-summary.md  # Coverage report
+│   │   ├── code-analysis.json   # Routes from code
+│   │   ├── screenshots/         # Page screenshots
+│   │   ├── findings/            # Issue details
+│   │   └── pages/               # Page inventories
+│   └── current -> 2026-02-03T16-46-31
+└── issues/
+```
+
+## Stopping an Audit
+
+To gracefully stop a running audit:
+
+```bash
+touch .complete-agent/audits/current/stop.flag
+```
+
+## Current Status
+
+**MVP Complete** - Core functionality working:
+
+- [x] Browser exploration via Claude for Chrome
+- [x] Code analysis (Next.js App Router)
+- [x] Route extraction and comparison
+- [x] Coverage metrics
+- [x] Progress tracking
+- [x] Stop flag support
+- [x] Basic finding detection (404s, errors)
+
+### Tested On
+
+- PostCraft (Next.js 14+ app) - 47% page coverage, 0 findings
+
+## Roadmap
+
+See [PRD.md](./PRD.md) for full requirements and [plan.md](./plan.md) for implementation phases.
+
+### Upcoming
+
+- Form interaction testing
+- PRD-to-feature matching
+- Automated GitHub issue creation
+- Fix verification workflow
+- Multi-permission testing (admin vs user)
+
+## License
+
+MIT

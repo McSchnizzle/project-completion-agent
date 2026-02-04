@@ -1,0 +1,9 @@
+# Complete Audit Agent
+.complete-agent/audits/
+.complete-agent/config.yml
+
+# Node modules (if any)
+node_modules/
+
+# OS files
+.DS_Store

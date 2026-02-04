@@ -54,13 +54,14 @@ environment:
   is_production_data: false       # Safety flag - CRITICAL
   safe_mode: false                # Skip destructive actions
 
-credentials:                       # Optional
+credentials:                       # Optional - support multiple permission levels
   admin:
     email: "${ADMIN_EMAIL}"
     password: "${ADMIN_PASSWORD}"
   user:
     email: "${USER_EMAIL}"
     password: "${USER_PASSWORD}"
+  guest: {}                         # Empty = unauthenticated testing
 
 exploration:
   max_pages: 20                   # Default: 20
@@ -276,12 +277,25 @@ When audit is paused (waiting for manual action like OAuth):
    {
      "created_at": "2026-02-03T16:50:00",
      "items": [
-       {"type": "user", "identifier": "test+audit-1234@testdomain.com", "cleanup": "Delete via admin panel"}
+       {
+         "type": "user",
+         "identifier": "test+audit-1234@testdomain.com",
+         "created_at": "2026-02-03T16:52:30",
+         "cleanup": "Delete via admin panel"
+       }
      ]
    }
    ```
 
-5. **Destructive action detection patterns:**
+5. **Confirmation for irreversible actions:**
+   Before any action that cannot be undone (even in non-safe mode):
+   - Write to progress.md: "About to perform irreversible action: [action]. Touch continue.flag to proceed or stop.flag to abort."
+   - Wait for `continue.flag` or `stop.flag`
+   - If `continue.flag`: proceed and delete flag
+   - If `stop.flag`: abort gracefully
+   - Irreversible actions include: account deletion, payment processing, data purge
+
+6. **Destructive action detection patterns:**
    - Button text: "Delete", "Remove", "Cancel", "Refund", "Destroy"
    - Form action URLs: `/delete`, `/remove`, `/destroy`
    - Confirmation dialogs: "permanent", "cannot be undone"
@@ -313,6 +327,12 @@ When audit is paused (waiting for manual action like OAuth):
 4. **Handle failures:**
    - Invalid credentials → Finding: "Login failed with provided credentials"
    - Validation error → Finding with error details
+
+5. **Test "Remember me" / session persistence:**
+   - After successful login, open a new tab to the same domain
+   - Check if still logged in (auth indicators present)
+   - Record result: "Session persists across tabs: yes/no"
+   - If "remember me" checkbox exists, test both states
 
 #### 5.3 User Creation (When Applicable)
 
@@ -391,8 +411,24 @@ Record created users in `test-data-created.json`.
    - "Submit form" → find submit, click
    - "Verify [condition]" → check page state
 3. Execute flows sequentially with error handling
-4. **Update exploration queue** as flows discover new pages
-5. Track completion in `code-analysis.json`
+4. **Handle branching flows:**
+   - "If [condition] then [action A] else [action B]"
+   - Check condition, execute appropriate branch
+   - Track which branch was taken in flow results
+   - If both branches are testable, run flow twice
+5. **Update exploration queue and app map** as flows discover new pages:
+   - Add newly discovered URLs to exploration queue
+   - Update `code-analysis.json` with new routes found
+   - Track coverage delta: `pages_discovered_during_flows: N`
+6. Track completion in `code-analysis.json`:
+   ```json
+   {
+     "flows_completed": 5,
+     "flows_failed": 1,
+     "flows_skipped": 2,
+     "pages_discovered_during_flows": 3
+   }
+   ```
 
 #### 6.2 Form Testing
 
@@ -425,6 +461,12 @@ For each discovered form, run test suite:
 - Timeout after 10 seconds
 - Retry once on timeout
 
+**Record all form test results as findings:**
+- Validation failures where expected validation didn't trigger → P1 finding
+- Server errors during submission → P0 finding
+- Success when failure expected (e.g., invalid data accepted) → P1 finding
+- Unexpected behavior → P2 finding with `[NEEDS CLARIFICATION]`
+
 #### 6.3 Edge Case Generation
 
 **SAFETY CHECK:** Skip on production data.
@@ -444,6 +486,13 @@ For each discovered form, run test suite:
    - Rapid form submission
    - Quick back/forward navigation
 
+**Record all edge case results as findings with appropriate severity:**
+- App crash or unhandled exception → P0 finding
+- XSS or injection vulnerability detected → P0 finding (security)
+- Data truncation without warning → P1 finding
+- Poor error message for boundary input → P2 finding
+- Double-submit creates duplicate data → P1 finding
+
 #### 6.4 Real-Time Feature Testing
 
 1. **Identify real-time features:**
@@ -451,12 +500,30 @@ For each discovered form, run test suite:
    - Polling indicators: spinners, auto-refresh text
    - Note: WebSocket detection may not be possible via MCP
 
-2. **Test:**
-   - Trigger action that should cause update
-   - Wait configurable seconds (default: 5)
-   - Verify state change
+2. **Read wait time from config:**
+   - Use `exploration.realtime_wait_seconds` from config (default: 5)
+   - Allow per-test override if feature seems slower
 
-3. **Flag failures as `[MAY BE FLAKY]`**
+3. **Test:**
+   - Trigger action that should cause update
+   - Record start timestamp
+   - Wait configured seconds
+   - Verify state change
+   - Record end timestamp and elapsed time
+
+4. **Record results with timing info:**
+   ```json
+   {
+     "feature": "live notifications",
+     "action": "Send message",
+     "wait_seconds": 5,
+     "actual_elapsed_ms": 2340,
+     "result": "success",
+     "notes": "Update appeared in 2.3s"
+   }
+   ```
+
+5. **Flag failures as `[MAY BE FLAKY]`** — real-time features are timing-dependent
 
 ### Phase 7: Finding Generation & Quality
 
@@ -521,22 +588,48 @@ Before presenting findings, run critique:
 
 3. Merge duplicates, keep best evidence
 
+4. **Save deduplication decisions in findings metadata:**
+   ```json
+   {
+     "dedup_status": "merged",
+     "dedup_reason": "Same element on same page",
+     "merged_with": "finding-003",
+     "existing_issue": null
+   }
+   ```
+   Or for previously reported:
+   ```json
+   {
+     "dedup_status": "previously_reported",
+     "dedup_reason": "Similar issue exists",
+     "merged_with": null,
+     "existing_issue": "#42"
+   }
+   ```
+
 #### 7.5 Privacy & Screenshot Retention
 
 1. **PII detection:**
    - Flag screenshots containing: emails, phone numbers, names, addresses
    - Warn: "Screenshot may contain PII - review before sharing"
 
-2. **Retention policy:**
-   - Keep local until issue creation succeeds
-   - After issue created: delete local copy
-   - Findings not promoted: delete at end of audit
-   - Upload fails: keep local, reference path
+2. **Screenshot storage model:**
+   - MCP screenshots are in-memory IDs (e.g., `ss_340070z01`) valid only during session
+   - These IDs are stored in finding JSON files
+   - For persistence, screenshots must be uploaded to GitHub issues during issue creation
+   - If session ends before issue creation, screenshot IDs become invalid
 
-3. **Cleanup command:** `/complete-audit --cleanup`
-   - Delete screenshots from previous audits
-   - Delete test data tracking files
-   - Keep findings and reports
+3. **Retention policy:**
+   - During session: screenshots exist as MCP in-memory IDs
+   - At issue creation: use `mcp__claude-in-chrome__upload_image` to embed in GitHub issue
+   - After successful upload: mark `screenshot_uploaded: true` in finding
+   - If upload fails: note in finding that screenshot was lost (session-only)
+   - Findings not promoted to issues: screenshots are lost when session ends (acceptable)
+
+4. **Cleanup command:** `/complete-audit --cleanup`
+   - Delete test data tracking files from previous audits
+   - Delete findings marked as rejected
+   - Keep findings and reports for promoted issues
 
 ### Finding Storage Format
 

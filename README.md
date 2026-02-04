@@ -111,7 +111,7 @@ touch .complete-agent/audits/current/stop.flag
 
 ## Current Status
 
-**Phases 0-7 Complete** - Full audit capability implemented:
+**All Phases Complete (v1.0)** - Full audit capability implemented:
 
 ### Phase 0-2, 4: Foundation (MVP)
 - [x] Preflight checks (write access, browser, GitHub CLI, config)
@@ -128,6 +128,8 @@ touch .complete-agent/audits/current/stop.flag
 - [x] Progress file with completion estimates
 - [x] Last action timestamps
 - [x] Continue flag for pause/resume
+- [x] HTML dashboard with live progress display
+- [x] Stop/Continue buttons (with CLI fallback)
 
 ### Phase 5: Authentication
 - [x] Data safety gating (production detection, safe mode)
@@ -150,6 +152,34 @@ touch .complete-agent/audits/current/stop.flag
 - [x] Deduplication
 - [x] Privacy/screenshot retention policy
 
+### Phase 8: Reporting & Issues
+- [x] Report generation (report.md)
+- [x] Interactive finding review and approval
+- [x] GitHub issue creation from approved findings
+- [x] Screenshot upload to issues
+- [x] Finding grouping by feature area
+
+### Phase 9: Verification
+- [x] `/complete-verify gh issue #42` command
+- [x] Issue tracking and reproduction data
+- [x] Regression testing on related areas
+- [x] Step budgeting (20 default, 10 in safe mode)
+
+### Phase 10: Polish
+- [x] Checkpoint/resume for interrupted audits
+- [x] Error recovery (network, page crashes, modals)
+- [x] Focused audit mode (`--focus`)
+- [x] Cleanup command (`--cleanup`)
+
+## Live Dashboard
+
+Monitor audit progress in real-time:
+
+```bash
+npx serve .complete-agent
+# Open http://localhost:3000/dashboard/
+```
+
 ### Tested On
 
 - PostCraft (Next.js 14+ app)
@@ -158,17 +188,9 @@ touch .complete-agent/audits/current/stop.flag
   - 3 forms, 1 modal identified
   - 0 findings (app functioning correctly)
 
-## Roadmap
+## Documentation
 
 See [PRD.md](./PRD.md) for full requirements and [plan.md](./plan.md) for implementation phases.
-
-### Upcoming (Phases 8-10)
-
-- Interactive finding review and approval
-- GitHub issue creation from approved findings
-- Fix verification (`/complete-verify gh issue #42`)
-- Regression testing
-- Checkpoint/resume for long audits
 
 ## License
 

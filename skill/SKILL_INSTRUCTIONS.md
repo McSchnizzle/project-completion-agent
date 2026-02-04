@@ -177,19 +177,28 @@ To stop: touch .complete-agent/audits/current/stop.flag
 To resume (if paused): touch .complete-agent/audits/current/continue.flag
 ```
 
-**progress.json format:**
+**progress.json format (per D.1 schema):**
 ```json
 {
-  "audit_id": "2026-02-03T16-46-31",
-  "started_at": "2026-02-03T16:46:31",
-  "last_action_at": "2026-02-03T17:15:00",
-  "last_action_elapsed": "28 minutes ago",
+  "schema_version": "1.0",
   "status": "running",
+  "pause_reason": null,
+  "started_at": "2026-02-03T16:46:31Z",
+  "updated_at": "2026-02-03T17:15:00Z",
   "current_url": "/settings",
-  "pages_visited": 8,
-  "pages_in_queue": 5,
-  "findings_count": 2,
-  "findings_by_severity": {"P0": 0, "P1": 1, "P2": 1}
+  "coverage": {
+    "pages_visited": 8,
+    "pages_in_queue": 5,
+    "pages_total": 17
+  },
+  "findings": {
+    "total": 2,
+    "by_severity": {"P0": 0, "P1": 1, "P2": 1}
+  },
+  "activity_log": [
+    {"timestamp": "2026-02-03T17:15:00Z", "action": "Visited", "detail": "/settings"},
+    {"timestamp": "2026-02-03T17:10:00Z", "action": "Tested form", "detail": "/login"}
+  ]
 }
 ```
 
@@ -218,6 +227,269 @@ When audit is paused (waiting for manual action like OAuth):
    - Verify the expected state (e.g., logged in after OAuth)
    - Resume exploration
 4. If stop.flag appears while waiting: exit gracefully
+
+#### 3.4 HTML Dashboard
+
+Create a live progress dashboard for monitoring audits.
+
+##### Dashboard Setup
+
+1. **Create dashboard file** at `.complete-agent/dashboard/index.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Complete Audit Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { color: #00d9ff; margin-bottom: 20px; }
+    .status-bar { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+    .status-card { background: #16213e; padding: 15px 20px; border-radius: 8px; flex: 1; min-width: 150px; }
+    .status-card h3 { font-size: 12px; text-transform: uppercase; color: #888; margin-bottom: 5px; }
+    .status-card .value { font-size: 24px; font-weight: bold; }
+    .status-running { color: #4ade80; }
+    .status-paused { color: #fbbf24; }
+    .status-complete { color: #60a5fa; }
+    .severity-p0 { background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; }
+    .severity-p1 { background: #f97316; color: white; padding: 2px 8px; border-radius: 4px; }
+    .severity-p2 { background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; }
+    .findings-row { display: flex; gap: 10px; }
+    .activity-log { background: #16213e; padding: 15px; border-radius: 8px; margin-top: 20px; max-height: 300px; overflow-y: auto; }
+    .activity-log h3 { margin-bottom: 10px; color: #00d9ff; }
+    .log-entry { padding: 8px 0; border-bottom: 1px solid #2a2a4a; font-size: 14px; }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: #888; margin-right: 10px; }
+    .controls { margin-top: 20px; display: flex; gap: 10px; }
+    .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+    .btn-stop { background: #ef4444; color: white; }
+    .btn-stop:disabled { background: #555; cursor: not-allowed; }
+    .btn-continue { background: #4ade80; color: #1a1a2e; }
+    .btn-continue:disabled { background: #555; color: #888; cursor: not-allowed; }
+    .pause-reason { background: #fbbf24; color: #1a1a2e; padding: 10px 15px; border-radius: 6px; margin-top: 10px; }
+    .connecting { color: #888; font-style: italic; }
+    .current-url { font-size: 14px; color: #888; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Complete Audit Dashboard</h1>
+
+    <div class="status-bar">
+      <div class="status-card">
+        <h3>Status</h3>
+        <div class="value" id="status">Connecting...</div>
+      </div>
+      <div class="status-card">
+        <h3>Pages Visited</h3>
+        <div class="value" id="pages-visited">-</div>
+      </div>
+      <div class="status-card">
+        <h3>In Queue</h3>
+        <div class="value" id="pages-queue">-</div>
+      </div>
+      <div class="status-card">
+        <h3>Findings</h3>
+        <div class="value findings-row">
+          <span class="severity-p0" id="findings-p0">0</span>
+          <span class="severity-p1" id="findings-p1">0</span>
+          <span class="severity-p2" id="findings-p2">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="current-url" id="current-url"></div>
+    <div class="pause-reason" id="pause-reason" style="display:none"></div>
+
+    <div class="controls">
+      <button class="btn btn-stop" id="btn-stop" onclick="stopAudit()">Stop Audit</button>
+      <button class="btn btn-continue" id="btn-continue" onclick="continueAudit()" style="display:none">Continue</button>
+      <a class="btn" id="btn-report" href="/audits/current/report.md" style="display:none;background:#60a5fa;color:white;text-decoration:none">View Report</a>
+    </div>
+
+    <div class="completion-summary" id="completion-summary" style="display:none;background:#16213e;padding:15px;border-radius:8px;margin-top:10px">
+      <h3 style="color:#4ade80;margin-bottom:10px">✓ Audit Complete</h3>
+      <div id="summary-text"></div>
+    </div>
+
+    <div class="activity-log">
+      <h3>Activity Log</h3>
+      <div id="activity-log"><div class="log-entry connecting">Waiting for audit data...</div></div>
+    </div>
+  </div>
+
+  <script>
+    let polling = true;
+    let lastStatus = null;
+
+    async function fetchProgress() {
+      try {
+        const res = await fetch('/audits/current/progress.json');
+        if (!res.ok) throw new Error('Not found');
+        const data = await res.json();
+        updateUI(data);
+      } catch (e) {
+        document.getElementById('status').textContent = 'Connecting...';
+        document.getElementById('status').className = 'value connecting';
+      }
+    }
+
+    function updateUI(data) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+      statusEl.className = 'value status-' + data.status;
+
+      document.getElementById('pages-visited').textContent = data.coverage?.pages_visited ?? data.pages_visited ?? '-';
+      document.getElementById('pages-queue').textContent = data.coverage?.pages_in_queue ?? data.pages_in_queue ?? '-';
+      document.getElementById('findings-p0').textContent = data.findings?.by_severity?.P0 ?? data.findings_by_severity?.P0 ?? 0;
+      document.getElementById('findings-p1').textContent = data.findings?.by_severity?.P1 ?? data.findings_by_severity?.P1 ?? 0;
+      document.getElementById('findings-p2').textContent = data.findings?.by_severity?.P2 ?? data.findings_by_severity?.P2 ?? 0;
+
+      if (data.current_url) {
+        document.getElementById('current-url').textContent = 'Current: ' + data.current_url;
+      }
+
+      // Pause reason
+      const pauseEl = document.getElementById('pause-reason');
+      if (data.status === 'paused' && data.pause_reason) {
+        pauseEl.textContent = 'Paused: ' + data.pause_reason;
+        pauseEl.style.display = 'block';
+      } else {
+        pauseEl.style.display = 'none';
+      }
+
+      // Button states
+      document.getElementById('btn-stop').disabled = (data.status === 'complete');
+      document.getElementById('btn-stop').style.display = (data.status === 'complete') ? 'none' : 'inline-block';
+      document.getElementById('btn-continue').style.display = (data.status === 'paused') ? 'inline-block' : 'none';
+      document.getElementById('btn-report').style.display = (data.status === 'complete') ? 'inline-block' : 'none';
+
+      // Completion summary
+      const summaryEl = document.getElementById('completion-summary');
+      if (data.status === 'complete') {
+        const total = data.findings?.total ?? 0;
+        const p0 = data.findings?.by_severity?.P0 ?? 0;
+        document.getElementById('summary-text').innerHTML =
+          `Found ${total} findings (${p0} critical). View the report for details.`;
+        summaryEl.style.display = 'block';
+      } else {
+        summaryEl.style.display = 'none';
+      }
+
+      // Activity log (prepend new entries, keep last 10)
+      if (data.activity_log && data.activity_log.length) {
+        const logHtml = data.activity_log.slice(0, 10).map(entry => {
+          const time = new Date(entry.timestamp).toLocaleTimeString();
+          return `<div class="log-entry"><span class="log-time">${time}</span>${entry.action}: ${entry.detail || ''}</div>`;
+        }).join('');
+        document.getElementById('activity-log').innerHTML = logHtml;
+      }
+
+      // Stop polling on complete
+      if (data.status === 'complete' && lastStatus !== 'complete') {
+        polling = false;
+      }
+      lastStatus = data.status;
+    }
+
+    function stopAudit() {
+      alert('To stop the audit, run:\\n\\ntouch .complete-agent/audits/current/stop.flag');
+    }
+
+    function continueAudit() {
+      alert('To continue the audit, run:\\n\\ntouch .complete-agent/audits/current/continue.flag');
+    }
+
+    // Poll every 2 seconds
+    setInterval(() => { if (polling) fetchProgress(); }, 2000);
+    fetchProgress();
+  </script>
+</body>
+</html>
+```
+
+2. **Create dashboard on audit start** if it doesn't exist
+
+##### Dashboard Server (Optional)
+
+For interactive Stop/Continue buttons, create `dashboard-server.js`:
+
+```javascript
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const PORT = 3000;
+const BASE_DIR = process.cwd(); // Should be .complete-agent/
+
+const MIME_TYPES = {
+  '.html': 'text/html',
+  '.json': 'application/json',
+  '.js': 'application/javascript',
+  '.css': 'text/css'
+};
+
+const server = http.createServer((req, res) => {
+  // API endpoints for flag creation
+  if (req.method === 'POST' && req.url === '/api/stop') {
+    fs.writeFileSync(path.join(BASE_DIR, 'audits/current/stop.flag'), '');
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({success: true}));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/continue') {
+    fs.writeFileSync(path.join(BASE_DIR, 'audits/current/continue.flag'), '');
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({success: true}));
+    return;
+  }
+
+  // Static file serving
+  let filePath = path.join(BASE_DIR, req.url === '/' ? 'dashboard/index.html' : req.url);
+  const ext = path.extname(filePath);
+
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+    res.writeHead(200, {'Content-Type': MIME_TYPES[ext] || 'text/plain'});
+    res.end(data);
+  });
+});
+
+server.listen(PORT, () => console.log(`Dashboard: http://localhost:${PORT}/dashboard/`));
+```
+
+##### Dashboard Usage
+
+**Option 1: Static server (read-only)**
+```bash
+npx serve .complete-agent
+# Dashboard: http://localhost:3000/dashboard/
+# Stop/Continue: Use touch commands shown in alerts
+```
+
+**Option 2: Interactive server**
+```bash
+cd .complete-agent && node dashboard-server.js
+# Dashboard: http://localhost:3000/dashboard/
+# Stop/Continue: Buttons work via API
+```
+
+##### Flag Lifecycle Management
+
+1. **Precedence:** If both `stop.flag` and `continue.flag` exist, `stop.flag` takes precedence
+2. **Cleanup:** Agent deletes flags after processing:
+   - Delete `continue.flag` after resuming
+   - Delete `stop.flag` after stopping
+   - Delete all flags on audit completion
+3. **Stale flags:** On audit start, check for existing flags and warn user
 
 ### Phase 4: Browser Exploration (if browser_mode is 'mcp')
 
@@ -549,11 +821,10 @@ Save to `.complete-agent/audits/current/findings/finding-{n}.json`
 - **P2 (Polish):** UX confusion, minor visual issues
 - **Question:** Ambiguous requirement, needs clarification
 
-**Confidence (0-100):**
-- 90-100: Definite bug, clear evidence
-- 70-89: Likely bug, may need verification
-- 50-69: Possible bug, uncertain
-- <50: Filter out (too low confidence)
+**Confidence:**
+- `high`: Definite bug, clear evidence (filter passes)
+- `medium`: Likely bug, may need verification (filter passes)
+- `low`: Possible bug, uncertain (filtered out by critique pass)
 
 **Categories:**
 - `auth`: Login, logout, permissions
@@ -571,7 +842,7 @@ Before presenting findings, run critique:
 3. "Are reproduction steps clear enough?"
 4. "Is severity appropriate?"
 
-- Filter out confidence < 50
+- Filter out `low` confidence findings
 - Improve vague descriptions
 - Mark uncertain as `[NEEDS CLARIFICATION]`
 - Save critique notes
@@ -607,6 +878,187 @@ Before presenting findings, run critique:
    }
    ```
 
+### Phase 8: Reporting & Issue Creation
+
+Generate reports, allow user review, create GitHub issues for approved findings.
+
+#### 8.1 Report Generation
+
+After audit completion, generate `report.md`:
+
+```markdown
+# Audit Report - {app_name} - {date}
+
+## Executive Summary
+
+| Severity | Count |
+|----------|-------|
+| P0 (Critical) | X |
+| P1 (Significant) | Y |
+| P2 (Polish) | Z |
+| Total | N |
+
+## Coverage
+
+- **Pages visited:** X of Y
+- **Forms tested:** A (happy path: B, validation: C)
+- **Flows completed:** D of E
+
+## Findings
+
+### P0 - Critical 🔴
+
+#### [Finding ID] Title
+- **Severity:** 🔴 P0 (Critical)
+- **URL:** /path
+- **Element:** description
+- **Screenshot:** [embedded or "unavailable"]
+
+**Reproduction Steps:**
+1. Step one
+2. Step two
+
+**Expected:** What should happen
+**Actual:** What happened
+
+**PRD Reference:** FR-X.Y (if available)
+
+---
+
+[Repeat for each finding, grouped by severity]
+
+## Recommendations
+
+1. **Priority fixes:** [P0 findings to address first]
+2. **Suggested approach:** [High-level fix suggestions]
+```
+
+Save to `.complete-agent/audits/current/report.md`
+
+#### 8.2 Interactive Review
+
+Present findings to user for approval:
+
+1. **Individual review:**
+   ```
+   Finding #1 [P1]: Form validation missing on /settings
+   URL: /settings
+   Options: [Accept] [Reject] [Skip]
+   ```
+   Use `AskUserQuestion` tool with options.
+
+2. **Bulk actions:**
+   - "Accept all P0 findings"
+   - "Reject all P2 findings"
+   - "Review remaining one by one"
+
+3. **Editable fields:**
+   - Severity (can upgrade/downgrade)
+   - Description (add context)
+   - Notes (for issue)
+
+4. **Save decisions** to `review-decisions.json`:
+   ```json
+   {
+     "reviewed_at": "2026-02-03T18:00:00Z",
+     "findings": {
+       "finding-001": {"decision": "accept", "edited_severity": null},
+       "finding-002": {"decision": "reject", "reason": "Intentional design"},
+       "finding-003": {"decision": "skip"}
+     }
+   }
+   ```
+
+#### 8.3 GitHub Issue Creation
+
+##### Preflight Checks (REQUIRED)
+
+Before creating any issues, verify:
+
+1. **gh CLI installed:** `which gh`
+2. **gh authenticated:** `gh auth status`
+3. **Repo access:** `gh repo view --json nameWithOwner`
+
+If any check fails:
+- Show clear error message
+- Offer to save findings to `manual-issues.md` instead
+- Generate formatted issue templates for manual creation
+
+##### Issue Creation Flow
+
+1. **For each accepted finding:**
+   - Title: `[{severity}] {short_description}`
+   - Body from finding details
+   - Labels: `bug`, `audit`, severity label
+
+2. **Issue body template** (see `templates/issue.md` for customization):
+   ```markdown
+   ## Description
+   {finding description}
+
+   ## Reproduction Steps
+   1. {step 1}
+   2. {step 2}
+
+   ## Expected Behavior
+   {expected}
+
+   ## Actual Behavior
+   {actual}
+
+   ## Screenshot
+   {embedded image or "Screenshot unavailable"}
+
+   ## Environment
+   - URL: {url}
+   - Element: {element}
+   - Audit ID: {audit_id}
+
+   ---
+   *Generated by Complete Audit Agent*
+   ```
+
+3. **Create via gh:**
+   ```bash
+   gh issue create --title "[P1] Form validation missing" \
+     --body "$(cat issue-body.md)" \
+     --label "bug,audit,P1"
+   ```
+
+4. **Grouping non-P0 findings:**
+   - If multiple findings in same feature area, create single issue
+   - List all findings in body
+   - P0 findings ALWAYS get individual issues
+
+5. **Record results** to `created-issues.json`
+
+6. **Post-creation cleanup:**
+   - Update each finding with `issue_number` field
+   - Generate summary: "Created X issues for Y findings"
+   - Display: issue URLs for user to review
+
+#### 8.4 Screenshot Handling
+
+##### Tool Validation
+
+Before issue creation, check screenshot capability:
+
+1. Verify `mcp__claude-in-chrome__upload_image` tool available
+2. Check MCP session active (`tabs_context_mcp` returns valid tabs)
+3. If unavailable:
+   - Log: "Screenshot upload unavailable"
+   - Set `screenshot_upload_available: false`
+   - Continue without screenshots
+
+##### Upload Workflow
+
+1. For each finding with screenshot:
+   - If session active: upload via MCP tool
+   - Embed in issue body
+   - Mark `screenshot_uploaded: true`
+2. If upload fails: note "Screenshot upload failed" in issue
+3. If session ended: note "Screenshot unavailable (session ended)"
+
 #### 7.5 Privacy & Screenshot Retention
 
 1. **PII detection:**
@@ -631,31 +1083,289 @@ Before presenting findings, run critique:
    - Delete findings marked as rejected
    - Keep findings and reports for promoted issues
 
-### Finding Storage Format
+### Phase 9: Verification Mode
+
+Verify that reported issues have been fixed using `/complete-verify`.
+
+#### 9.1 Issue Tracking
+
+When issues are created (Phase 8), save reproduction data:
+
+1. **Create issue file:** `.complete-agent/issues/issue-{number}.json`
+   ```json
+   {
+     "schema_version": "1.0",
+     "issue_number": 42,
+     "github_url": "https://github.com/owner/repo/issues/42",
+     "finding_ids": ["finding-001"],
+     "reproduction": {
+       "url": "/settings",
+       "element": "email input",
+       "steps": ["Navigate to /settings", "Enter invalid email", "Click Save"],
+       "expected": "Validation error shown"
+     },
+     "verifications": []
+   }
+   ```
+
+2. **Track issue status:**
+   ```bash
+   gh issue view {number} --json state
+   ```
+
+3. **Bidirectional linking:**
+   - Finding → issue_number
+   - Issue → finding_ids
+
+#### 9.2 Verify Command
+
+**Syntax:** `/complete-verify gh issue #42`
+
+**Flow:**
+1. Parse issue number from command
+2. Load reproduction steps from issue file
+3. If file missing, offer to re-fetch from GitHub:
+   ```bash
+   gh issue view 42 --json title,body
+   ```
+4. Navigate to URL
+5. Execute reproduction steps
+6. Capture result screenshot
+
+**Results:**
+- **Fixed:** Issue no longer reproduces → Add verification to file
+- **Still Broken:** Issue still reproduces → Capture new screenshot, update file
+- **New Error:** Different error occurred → Create new finding
+- **Cannot Verify:** Unable to reach page/execute → Report with reason
+
+**Update issue file:**
+```json
+{
+  "verifications": [
+    {
+      "verified_at": "2026-02-05T10:30:00Z",
+      "result": "fixed",
+      "notes": "Validation now shows error message",
+      "screenshot_id": "ss_verify_001"
+    }
+  ]
+}
+```
+
+**Optional:** Add comment to GitHub issue:
+```bash
+gh issue comment 42 --body "Verification result: Fixed. Validation error now displays correctly."
+```
+
+#### 9.3 Regression Testing
+
+After verifying a fix, check related functionality:
+
+1. **Identify related areas:**
+   - Same page: test other elements
+   - Same feature area: test related flows
+   - Example: login fix → test logout, password reset
+
+2. **Run abbreviated tests:**
+   - Happy-path only (no edge cases)
+   - Look for new errors
+   - **Budget:** Max 20 steps (configurable: `verification.max_regression_steps`)
+   - In safe mode: limit to 10 steps, skip destructive tests
+
+3. **Report findings:**
+   - New issues found during regression
+   - Offer to create issues for regressions
+
+#### 9.4 Verify Skill Definition
+
+Add to skill.md:
+```
+/complete-verify gh issue #42
+```
+
+### Phase 10: Polish & Edge Cases
+
+Improve robustness and handle edge cases.
+
+#### 10.1 Checkpoint & Resume
+
+**Save checkpoint** after each major action:
 
 ```json
 {
+  "checkpoint_at": "2026-02-03T17:00:00Z",
+  "current_url": "/settings",
+  "exploration_queue": ["/profile", "/billing"],
+  "visited_pages": ["/", "/dashboard", "/settings"],
+  "findings_so_far": 3,
+  "current_permission_level": "admin"
+}
+```
+
+Save to `.complete-agent/audits/current/checkpoint.json`
+
+**Resume with:** `/complete-audit --resume`
+
+**Resume flow:**
+1. Check if checkpoint.json exists:
+   - If missing: error with "No checkpoint found. Run `/complete-audit` to start a new audit."
+2. Read checkpoint.json
+3. Validate JSON (if corrupted, warn and offer fresh start)
+4. Check age (if >24h, warn about stale state)
+5. Restore state:
+   - Navigate to current_url
+   - Restore exploration_queue
+   - Continue from last position
+6. Update progress.md: "Resumed from checkpoint"
+
+#### 10.2 Error Recovery
+
+**Network errors:**
+1. Retry with exponential backoff (1s, 2s, 4s)
+2. Save checkpoint before giving up
+3. Log error details for debugging
+
+**Page crashes:**
+1. Detect unresponsive page (timeout > 30s)
+2. Save checkpoint
+3. Skip page and continue with next in queue
+
+**Unexpected modals/popups:**
+1. Detect modal overlays (common selectors: `[role=dialog]`, `.modal`, `[aria-modal=true]`)
+2. Try to dismiss: click X, press Escape
+3. If can't dismiss: log and continue
+
+#### 10.3 Focused Audit Mode
+
+**Syntax:** `/complete-audit --focus "auth, payments"`
+
+**Flow:**
+1. Parse focus areas from command
+2. Filter exploration:
+   - URL patterns: "auth" matches `/login`, `/signup`, `/logout`
+   - PRD feature names
+   - Component categories
+3. Only visit matching routes
+4. Report focus coverage:
+   ```
+   Focused on: auth, payments
+   Covered 8 of 10 routes in focus areas
+   ```
+
+#### 10.4 Cleanup Command
+
+**Syntax:** `/complete-audit --cleanup`
+
+**Flow:**
+1. List what will be deleted:
+   - Audit directories > 30 days old
+   - Test data tracking files
+   - (Keep: issue tracking data)
+2. Check for active audits:
+   - If `current` symlink points to in-progress audit, warn and skip
+3. Require user confirmation
+4. Delete selected items
+
+### Data Contracts (Cross-Phase Schemas)
+
+All JSON files use these schemas with `schema_version` for forward compatibility.
+
+**progress.json schema:**
+```json
+{
+  "schema_version": "1.0",
+  "status": "running|paused|complete",
+  "pause_reason": "string|null",
+  "started_at": "ISO8601",
+  "updated_at": "ISO8601",
+  "current_url": "string|null",
+  "coverage": {
+    "pages_visited": 0,
+    "pages_in_queue": 0,
+    "pages_total": 0
+  },
+  "findings": {
+    "total": 0,
+    "by_severity": {"P0": 0, "P1": 0, "P2": 0}
+  },
+  "activity_log": [
+    {"timestamp": "ISO8601", "action": "string", "detail": "string"}
+  ]
+}
+```
+
+**created-issues.json schema:**
+```json
+{
+  "schema_version": "1.0",
+  "created_at": "ISO8601",
+  "issues": [
+    {
+      "number": 42,
+      "url": "https://github.com/...",
+      "title": "string",
+      "findings": ["finding-001"],
+      "grouped": false,
+      "screenshot_uploaded": true
+    }
+  ]
+}
+```
+
+**issue-{number}.json schema (for verification):**
+```json
+{
+  "schema_version": "1.0",
+  "issue_number": 42,
+  "github_url": "https://github.com/...",
+  "finding_ids": ["finding-001"],
+  "reproduction": {
+    "url": "string",
+    "element": "string|null",
+    "steps": ["string"],
+    "expected": "string"
+  },
+  "verifications": [
+    {
+      "verified_at": "ISO8601",
+      "result": "fixed|still_broken|new_error|cannot_verify",
+      "notes": "string",
+      "screenshot_id": "MCP_ID|null"
+    }
+  ]
+}
+```
+
+### Finding Storage Format (per D.2 schema)
+
+```json
+{
+  "schema_version": "1.0",
   "id": "finding-001",
   "severity": "P1",
-  "confidence": 85,
-  "category": "forms",
+  "confidence": "high",
+  "title": "Form validation missing on /settings",
+  "description": "Email field accepts invalid input without showing validation error",
   "url": "/settings",
   "element": "email input",
-  "action": "Submit with invalid email",
-  "expected": "Validation error message",
-  "actual": "Form submitted without validation",
-  "screenshot": "ss_finding_001",
+  "screenshot_id": "ss_finding_001",
   "screenshot_uploaded": false,
-  "screenshot_deleted": false,
-  "retention_reason": null,
-  "reproduction": [
+  "reproduction_steps": [
     "Navigate to /settings",
     "Enter 'notanemail' in email field",
     "Click Save"
   ],
+  "expected": "Validation error message",
+  "actual": "Form submitted without validation",
   "prd_reference": "FR-4.2 Email validation",
-  "critique_notes": "Clear bug, validation missing",
-  "console_errors": []
+  "feature_area": "settings",
+  "created_at": "2026-02-03T17:00:00Z",
+  "issue_number": null,
+  "deduplication": {
+    "is_duplicate": false,
+    "duplicate_of": null,
+    "reason": null
+  }
 }
 ```
 

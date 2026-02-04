@@ -14,10 +14,12 @@ The Project Completion Agent automates the tedious final stretch of software pro
 
 ## Installation
 
-Copy the skill to your Claude Code skills directory:
+Clone the repo and copy the skill to your Claude Code skills directory:
 
 ```bash
-cp -r ~/.claude/skills/complete-audit ~/.claude/skills/
+git clone https://github.com/McSchnizzle/project-completion-agent.git
+mkdir -p ~/.claude/skills/complete-audit
+cp -r project-completion-agent/skill/* ~/.claude/skills/complete-audit/
 ```
 
 Restart Claude Code to load the skill.
@@ -107,11 +109,14 @@ touch .complete-agent/audits/current/stop.flag
 
 ## Current Status
 
-**MVP Complete** - Core functionality working:
+**MVP 100% Complete** - All core functionality working:
 
+- [x] Preflight checks (write access, browser, GitHub CLI, config)
+- [x] PRD parsing (features, user flows, out-of-scope items)
 - [x] Browser exploration via Claude for Chrome
 - [x] Code analysis (Next.js App Router)
 - [x] Route extraction and comparison
+- [x] Component analysis (forms, modals, auth patterns)
 - [x] Coverage metrics
 - [x] Progress tracking
 - [x] Stop flag support
@@ -119,7 +124,11 @@ touch .complete-agent/audits/current/stop.flag
 
 ### Tested On
 
-- PostCraft (Next.js 14+ app) - 47% page coverage, 0 findings
+- PostCraft (Next.js 14+ app)
+  - 47% page coverage (8 of 17 pages)
+  - 20 PRD features extracted and mapped
+  - 3 forms, 1 modal identified
+  - 0 findings (app functioning correctly)
 
 ## Roadmap
 

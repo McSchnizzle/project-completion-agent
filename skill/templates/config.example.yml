@@ -10,8 +10,12 @@ environment:
   url: "https://staging.example.com"
 
   # IMPORTANT: Is this production data? If true, agent will be extra careful
-  # and may skip certain destructive tests
+  # and will skip ALL destructive tests and data creation
   is_production_data: false
+
+  # Safe mode: Skip destructive actions (delete, refund, etc.)
+  # Automatically enabled if is_production_data is true
+  safe_mode: false
 
   # Path to the target application's codebase (for code analysis)
   # If not specified, agent will look in the current project
@@ -50,7 +54,7 @@ exploration:
   page_load_wait: 2000
 
   # Wait time in seconds for real-time features (default: 5)
-  realtime_wait: 5
+  realtime_wait_seconds: 5
 
 # =============================================================================
 # OPTIONAL: GitHub Integration
@@ -69,17 +73,21 @@ github:
   group_findings: true
 
 # =============================================================================
-# OPTIONAL: Safe Mode
+# OPTIONAL: Safe Mode (under environment for consistency)
 # =============================================================================
 
-safety:
-  # Skip destructive actions like delete, refund (default: false)
-  safe_mode: false
+# NOTE: safe_mode is set in the environment section above.
+# If is_production_data: true, safe_mode is automatically forced ON.
 
+# Additional safety settings:
+safety:
   # Actions to always skip (even if safe_mode is false)
   skip_actions:
     - "delete-account"
     - "process-refund"
+
+  # Require confirmation before destructive actions
+  confirm_destructive: true
 
 # =============================================================================
 # OPTIONAL: Focus Areas

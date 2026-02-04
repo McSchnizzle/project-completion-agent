@@ -17,11 +17,12 @@ Run these checks IN ORDER before starting any audit. Display results in a capabi
 
 #### 0.1 Write Access Check
 ```bash
-# Test write access
-touch .complete-agent/.write-test && rm .complete-agent/.write-test
+# Test write access in project root FIRST (before .complete-agent exists)
+touch .write-access-test && rm .write-access-test
 ```
 - If fails: abort with "Cannot write to project directory"
 - If succeeds: ✓ Write access confirmed
+- NOTE: Test in project root, not .complete-agent/ (which may not exist yet)
 
 #### 0.2 Browser Capability Detection
 ```
@@ -126,7 +127,7 @@ Exclude: node_modules, .git, vendor, dist, build
 2. **Extract Routes**
    - Next.js: glob `app/**/page.tsx` or `pages/**/*.tsx`
    - Express: search for `app.get`, `router.get` patterns
-   - Save route inventory to `coverage.json`
+   - Save route inventory to `code-analysis.json`
 
 3. **Compare with PRD**
    - Which PRD features have matching routes?
@@ -144,8 +145,10 @@ Exclude: node_modules, .git, vendor, dist, build
    - Extract all links, buttons, forms
    - Build exploration queue with internal links
    - Visit each page (up to max_pages limit)
-   - Screenshot each page
+   - Screenshot each page (stored as MCP screenshot IDs in page inventories)
    - Check for obvious errors (404s, error messages)
+
+**Screenshot Note:** Screenshots are captured via MCP and stored as reference IDs (e.g., `ss_340070z01`) in page inventory JSON files. These IDs reference images held in browser memory during the session. For persistent storage, screenshots can be uploaded to GitHub issues when findings are created.
 
 3. **Track Progress**
    - Update `progress.md` after each action

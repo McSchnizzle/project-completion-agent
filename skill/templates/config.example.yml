@@ -1,0 +1,92 @@
+# Complete Audit Configuration
+# Copy this to your project root as .complete-agent/config.yml
+
+# =============================================================================
+# REQUIRED: Environment Settings
+# =============================================================================
+
+environment:
+  # URL of the running application to audit
+  url: "https://staging.example.com"
+
+  # IMPORTANT: Is this production data? If true, agent will be extra careful
+  # and may skip certain destructive tests
+  is_production_data: false
+
+  # Path to the target application's codebase (for code analysis)
+  # If not specified, agent will look in the current project
+  # codebase_path: "/path/to/app/codebase"
+
+  # Path to the target application's PRD (otherwise auto-discovered)
+  # prd_path: "/path/to/PRD-v1.md"
+
+# =============================================================================
+# OPTIONAL: Test Credentials
+# =============================================================================
+
+# Provide credentials for different permission levels
+# Use environment variables for security: ${VAR_NAME}
+credentials:
+  admin:
+    email: "${ADMIN_TEST_EMAIL}"
+    password: "${ADMIN_TEST_PASSWORD}"
+  user:
+    email: "${USER_TEST_EMAIL}"
+    password: "${USER_TEST_PASSWORD}"
+  # guest: (no credentials needed for unauthenticated testing)
+
+# =============================================================================
+# OPTIONAL: Exploration Settings
+# =============================================================================
+
+exploration:
+  # Maximum pages to visit during full audit (default: 20)
+  max_pages: 20
+
+  # Only follow links to same origin (default: true)
+  same_origin_only: true
+
+  # Wait time in ms after navigation (default: 2000)
+  page_load_wait: 2000
+
+  # Wait time in seconds for real-time features (default: 5)
+  realtime_wait: 5
+
+# =============================================================================
+# OPTIONAL: GitHub Integration
+# =============================================================================
+
+github:
+  # Automatically create issues for approved findings (default: true)
+  create_issues: true
+
+  # Labels to apply to created issues
+  labels:
+    - "audit"
+    - "completion-agent"
+
+  # Group non-P0 findings by feature area (default: true)
+  group_findings: true
+
+# =============================================================================
+# OPTIONAL: Safe Mode
+# =============================================================================
+
+safety:
+  # Skip destructive actions like delete, refund (default: false)
+  safe_mode: false
+
+  # Actions to always skip (even if safe_mode is false)
+  skip_actions:
+    - "delete-account"
+    - "process-refund"
+
+# =============================================================================
+# OPTIONAL: Focus Areas
+# =============================================================================
+
+# Limit audit to specific areas (speeds up audit, useful for iterating)
+# focus_areas:
+#   - "auth"
+#   - "payments"
+#   - "user-profile"

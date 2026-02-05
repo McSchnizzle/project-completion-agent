@@ -45,7 +45,7 @@ Every audit MUST produce these files in `.complete-agent/audits/{timestamp}/`:
 ```
 REQUIRED:
 ├── progress.md           # Human-readable progress
-├── progress.json         # Machine-readable progress (schema D.1)
+├── progress.json         # Machine-readable progress (see Data Contracts)
 ├── prd-summary.json      # Parsed PRD features (Phase 1)
 ├── code-analysis.json    # Routes and forms (Phase 2)
 ├── report.md             # Final report
@@ -113,8 +113,21 @@ Read: .complete-agent/config.yml
 ```yaml
 environment:
   url: "https://example.com"      # Required for browser audit
-  is_production_data: false       # Safety flag - CRITICAL
+  is_production_data: false       # Safety flag - CRITICAL (null = auto-detect)
   safe_mode: false                # Skip destructive actions
+
+  # Environment detection (used when is_production_data not explicitly set)
+  # Precedence: CLI flag > config > hostname pattern > default (safe)
+  safe_hostnames:                 # Patterns that indicate safe environment
+    - "localhost"
+    - "127.0.0.1"
+    - "*.local"
+    - "staging.*"
+    - "dev.*"
+    - "test.*"
+  production_hostnames:           # Patterns that indicate production
+    - "*.prod.*"
+    - "production.*"
 
 credentials:                       # Optional - support multiple permission levels
   admin:
@@ -127,12 +140,46 @@ credentials:                       # Optional - support multiple permission leve
 
 exploration:
   max_pages: 20                   # Default: 20
+  max_routes: 50                  # Max unique route patterns
+  max_per_pattern: 5              # Max instances per parameterized route
+  exploration_timeout: 1800       # 30 minutes max exploration
   same_origin_only: true          # Default: true
   realtime_wait_seconds: 5        # Default: 5
+
+testing:
+  security_checks: false          # Opt-in for security-adjacent tests
+  boundary_defaults:              # Conservative limits for boundary testing
+    string_max: 255               # Not 10000
+    number_min: -1000
+    number_max: 1000000           # Not MAX_INT
+    date_years_past: 10
+    date_years_future: 10
+
+screenshots:
+  max_storage_mb: 100             # Warn at 80MB, refuse at 100MB
 
 github:
   create_issues: true             # Default: true
   labels: ["audit", "completion-agent"]
+
+# Action classification overrides
+action_classification:
+  dangerous_patterns:             # Never auto-execute
+    - "delete account"
+    - "payment"
+    - "purchase"
+    - "credit card"
+  delete_patterns:                # Require confirmation in full mode
+    - "delete"
+    - "remove"
+    - "cancel"
+    - "destroy"
+  create_patterns:                # Track data creation
+    - "submit"
+    - "create"
+    - "add"
+    - "save"
+    - "post"
 ```
 
 #### 0.5 App URL Validation (if browser_mode is 'mcp')
@@ -159,41 +206,65 @@ Options: [Yes] [No, select different] [Proceed without PRD]
 - If No: Present next candidate or ask for path
 - If Proceed without: Log warning, continue with code-only analysis
 
-#### 0.8 Audit Directory Initialization
+#### 0.8 Audit Directory Initialization (MANDATORY)
 **Create audit directory structure BEFORE any file writes:**
-```bash
-mkdir -p .complete-agent/audits/{timestamp}
-mkdir -p .complete-agent/audits/{timestamp}/findings
-mkdir -p .complete-agent/audits/{timestamp}/pages
-ln -sfn {timestamp} .complete-agent/audits/current
-```
-- Check for stale flags from previous run
-- If found: warn user and offer cleanup
+
+1. **Generate timestamp:** `{YYYYMMDD_HHMMSS}` format
+2. **Create directories:**
+   ```bash
+   mkdir -p .complete-agent/audits/{timestamp}
+   mkdir -p .complete-agent/audits/{timestamp}/findings
+   mkdir -p .complete-agent/audits/{timestamp}/pages
+   mkdir -p .complete-agent/dashboard
+   ```
+3. **Create symlink:**
+   ```bash
+   ln -sfn {timestamp} .complete-agent/audits/current
+   ```
+4. **Check for stale flags from previous run:**
+   - If `stop.flag` or `continue.flag` exists in `audits/current/`:
+   - **Use AskUserQuestion:** "Found stale control flags from previous audit. Clean up? [Yes/No]"
+   - If Yes: Delete the flags
+   - If No: Log warning and proceed
+5. **GATE CHECK:** Verify directories exist before proceeding
+   - If directory creation fails: ABORT with "Cannot create audit directory structure"
+
+All subsequent file paths use `.complete-agent/audits/current/` prefix.
 
 #### 0.9 Preflight Summary Output (MANDATORY - MUST BE DISPLAYED)
+
+**This display is MANDATORY. The audit CANNOT proceed without showing this to the user.**
+
 ```
 ═══════════════════════════════════════════
   PREFLIGHT CHECK RESULTS
 ═══════════════════════════════════════════
   ✓ Write access: confirmed
-  ✓ Browser automation: Claude for Chrome
-  ✓ GitHub CLI: authenticated ({username})
-  ✓ Config: .complete-agent/config.yml
+  ✓ Browser automation: {Claude for Chrome / none}
+  ✓ GitHub CLI: {authenticated (username) / not authenticated}
+  ✓ Config: {path or 'created from template'}
   ✓ App URL: {url} (HTTP {status})
-  ✓ PRD: {prd_file} (features parsed in Phase 1)
+  ✓ PRD: {prd_file or 'none - code-only audit'}
   ⚠ Safe mode: {ON/OFF}
   ⚠ Production data: {true/false}
 ═══════════════════════════════════════════
 ```
 
-#### 0.10 User Confirmation (MANDATORY)
+**After displaying:**
+- Log to `progress.md`: "Preflight summary displayed to user"
+- Log to `activity_log` in progress.json: `{"timestamp": "...", "action": "Preflight summary displayed", "detail": "All checks passed"}`
+
+#### 0.10 User Confirmation (MANDATORY - CANNOT SKIP)
 **Use AskUserQuestion:**
 ```
-Ready to start audit. Proceed?
+Ready to start audit of {url}. Proceed?
 Options: [Yes, start audit] [No, abort]
 ```
 - If No: Exit gracefully with "Audit aborted by user"
-- If Yes: Record `preflight_completed: true` in progress.json
+- If Yes:
+  - Record `preflight_completed: true` in progress.json
+  - Log to `activity_log`: `{"timestamp": "...", "action": "User confirmed audit start", "detail": "{url}"}`
+  - Proceed to Phase 1
 
 ### Phase 1: PRD Parsing (MANDATORY if PRD exists)
 
@@ -253,7 +324,31 @@ As features are tested:
 - Update status: `"not_tested"` → `"tested"` → `"passed"` / `"failed"`
 - Link findings to feature IDs via `feature_id` field
 
-**If no PRD:** Create minimal prd-summary.json with `"prd_file": null` and empty arrays.
+#### 1.4 No-PRD Fallback (MANDATORY if no PRD)
+If user selected "Proceed without PRD" or no PRD was found:
+
+**Create `prd-summary.json` with this schema:**
+```json
+{
+  "schema_version": "1.0",
+  "prd_file": null,
+  "parsed_at": "2026-02-04T08:00:00Z",
+  "features": [],
+  "flows": [],
+  "out_of_scope": [],
+  "deferred": [],
+  "summary": {
+    "total_features": 0,
+    "total_flows": 0,
+    "must_have": 0,
+    "should_have": 0,
+    "could_have": 0
+  },
+  "notes": "No PRD provided - code-only analysis. Features will be inferred from code."
+}
+```
+
+**GATE CHECK:** `prd-summary.json` MUST exist (even if minimal) before Phase 2.
 
 ### Phase 2: Code Analysis (MANDATORY)
 
@@ -348,7 +443,83 @@ Map routes to PRD features:
 
 **This file is a GATE:** Browser exploration (Phase 4) cannot start until code-analysis.json exists.
 
+#### 2.6 External Site / No Codebase Fallback (MANDATORY)
+
+If no local codebase is accessible (external website audit):
+
+1. **Attempt framework inference from page source:**
+   - Check for React markers in DOM
+   - Check for Vue, Angular, or other framework signatures
+   - Record as "inferred" if detected
+
+2. **Create `code-analysis.json` with fallback schema:**
+```json
+{
+  "schema_version": "1.0",
+  "analyzed_at": "2026-02-04T08:05:00Z",
+  "framework": "unknown (external site)" ,
+  "codebase_path": null,
+  "routes": [],
+  "forms": [],
+  "api_routes": [],
+  "coverage": {
+    "routes_found": 0,
+    "routes_matched_to_prd": 0,
+    "routes_unmatched": 0,
+    "forms_found": 0
+  },
+  "notes": "External website audit - no codebase access. Routes will be discovered via browser exploration only."
+}
+```
+
+3. **Log:** "No codebase access - routes will be discovered via browser exploration"
+
+**GATE CHECK:** `code-analysis.json` MUST exist (even with null codebase_path) before Phase 4.
+
 ### Phase 3: Progress Dashboard
+
+#### 3.0 Initialize Progress Files (MANDATORY - First Action of Phase 3)
+
+**IMMEDIATELY after Phase 2 gate passes, before any other Phase 3 actions:**
+
+1. **Create `progress.md` with initial template:**
+```markdown
+# Audit Progress
+Started: {timestamp}
+Last Action: {timestamp}
+Current: initializing
+Status: running
+
+## Coverage
+- Pages visited: 0
+- Pages in queue: 0
+- Estimated remaining: unknown
+
+## Findings
+- Total: 0
+- P0 (Critical): 0
+- P1 (Significant): 0
+- P2 (Polish): 0
+
+## Recent Activity
+- [{timestamp}] Audit initialized
+- [{timestamp}] Preflight completed
+- [{timestamp}] PRD parsed: {n} features
+- [{timestamp}] Code analysis complete
+
+## Controls
+To stop: touch .complete-agent/audits/current/stop.flag
+To resume (if paused): touch .complete-agent/audits/current/continue.flag
+```
+
+2. **Create `progress.json` with initial schema** (see Data Contracts section)
+
+3. **Create dashboard if not exists:**
+   - Copy dashboard template to `.complete-agent/dashboard/index.html`
+   - Log: "Dashboard available at .complete-agent/dashboard/index.html"
+
+4. **GATE CHECK:** Both `progress.md` AND `progress.json` MUST exist before Phase 4
+   - If either file creation fails: ABORT with "Cannot create progress files"
 
 #### 3.1 Progress File Updates
 
@@ -383,7 +554,7 @@ To stop: touch .complete-agent/audits/current/stop.flag
 To resume (if paused): touch .complete-agent/audits/current/continue.flag
 ```
 
-**progress.json format (per D.1 schema):**
+**progress.json format (see Data Contracts for full schema):**
 ```json
 {
   "schema_version": "1.0",
@@ -408,31 +579,51 @@ To resume (if paused): touch .complete-agent/audits/current/continue.flag
 }
 ```
 
-#### 3.2 Stop Flag Behavior
+#### 3.2 Stop Flag Behavior (MANDATORY CHECK)
 
-Check for `.complete-agent/audits/current/stop.flag` BEFORE:
+**Check for `.complete-agent/audits/current/stop.flag` BEFORE:**
 - Any navigation
 - Any click action
 - Any form interaction
 - Starting a new page exploration
 
-If stop flag exists:
-1. Finish current atomic action
-2. Save checkpoint state
-3. Generate partial report
-4. Exit with message: "Audit stopped by user. Partial report saved."
+**If stop flag exists:**
+1. Finish current atomic action (do not leave page in inconsistent state)
+2. **Save `checkpoint.json`:**
+   ```json
+   {
+     "checkpoint_at": "2026-02-04T10:30:00Z",
+     "current_url": "/settings",
+     "exploration_queue": ["/profile", "/billing"],
+     "visited_pages": ["/", "/dashboard", "/settings"],
+     "findings_so_far": 3,
+     "current_permission_level": "admin"
+   }
+   ```
+3. **Generate partial `report.md`** with findings so far
+4. **Update `progress.json`:** Set `status: "stopped"`
+5. **Delete `stop.flag`** after processing
+6. **Exit with message:** "Audit stopped by user. Partial report saved. Resume with `/complete-audit --resume`"
 
 #### 3.3 Continue Flag Behavior
 
-When audit is paused (waiting for manual action like OAuth):
+When audit is paused (waiting for manual action like OAuth, email verification):
 
-1. Write to progress.md: "Paused: {reason}. Touch continue.flag to resume."
-2. Poll for `.complete-agent/audits/current/continue.flag` every 5 seconds
-3. When found:
-   - Delete the continue.flag file
+1. **Update progress.md:** "Paused: {reason}. Touch continue.flag to resume."
+2. **Update progress.json:** Set `status: "paused"`, `pause_reason: "{reason}"`
+3. **Poll for `.complete-agent/audits/current/continue.flag`:**
+   - Check every 5 seconds
+   - Maximum wait time: 10 minutes (configurable)
+4. **When `continue.flag` found:**
+   - Delete the `continue.flag` file
    - Verify the expected state (e.g., logged in after OAuth)
+   - Update `progress.json`: Set `status: "running"`, `pause_reason: null`
+   - Log to activity_log: "Resumed after {reason}"
    - Resume exploration
-4. If stop.flag appears while waiting: exit gracefully
+5. **If `stop.flag` appears while waiting:** Execute stop behavior (see 3.2)
+6. **If timeout (10 min):**
+   - Save `checkpoint.json`
+   - Exit with: "Audit paused awaiting manual action. Resume with `/complete-audit --resume`"
 
 #### 3.4 HTML Dashboard
 
@@ -709,15 +900,76 @@ cd .complete-agent && node dashboard-server.js
 - Take initial screenshot
 
 #### 4.2 Initialize Exploration Queue
+
+##### 4.2.1 Route Canonicalization
+
+**Normalize all routes before adding to queue:**
+
+1. **Strip non-essential query parameters:**
+   - Keep key identifiers: `id`, `tab`, `page`
+   - Remove tracking/session params: `utm_*`, `ref`, `session`
+   - Example: `/users/123?utm_source=email` → `/users/123`
+
+2. **Normalize path:**
+   - Remove trailing slashes: `/settings/` → `/settings`
+   - Lowercase path segments
+
+3. **Extract route patterns for parameterized routes:**
+   - Numeric IDs: `/users/123` → `/users/{id}`
+   - UUIDs: `/items/550e8400-e29b-41d4-a716-446655440000` → `/items/{uuid}`
+   - Slugs: `/blog/my-post-title` → `/blog/{slug}` (if consistent pattern detected)
+
+4. **Generate route ID:**
+   ```
+   route_id = hash(method + canonical_path)
+   Example: GET /users/{id} → "route_get_users_id"
+   ```
+
+##### 4.2.2 Stop Rules (Prevent Infinite Crawl)
+
+**Apply these limits to exploration:**
+
+| Rule | Default | Config Key |
+|------|---------|------------|
+| Max unique route patterns | 50 | `exploration.max_routes` |
+| Max instances per pattern | 5 | `exploration.max_per_pattern` |
+| Time budget | 30 min | `exploration.exploration_timeout` |
+| Max pages | 20 | `exploration.max_pages` |
+
+**Example:** For `/users/{id}`, visit at most 5 different user IDs, not every user.
+
+**Stop exploration when ANY condition met:**
+- Queue empty (all patterns visited) ✅
+- `max_routes` reached → Log warning, mark coverage incomplete
+- `max_per_pattern` reached for a pattern → Skip additional instances, log
+- `exploration_timeout` exceeded → Save checkpoint, generate partial report
+- `stop.flag` detected → Stop gracefully
+
+##### 4.2.3 Queue Initialization
+
 Load routes from `code-analysis.json` into queue:
 - Prioritize PRD-matched routes (high confidence)
 - Add entry URL if not in list
-- Respect `max_pages` from config (default: 20)
+- Apply route canonicalization
+- Respect stop rules from config
 - Respect `same_origin_only` from config (default: true)
+
+**Track routes by pattern in progress.json:**
+```json
+{
+  "routes_by_pattern": {
+    "/users/{id}": {"instances_visited": 3, "max": 5},
+    "/settings": {"instances_visited": 1, "max": 1},
+    "/blog/{slug}": {"instances_visited": 2, "max": 5}
+  },
+  "unique_patterns_visited": 12,
+  "max_patterns": 50
+}
+```
 
 #### 4.3 Explore Pages (MANDATORY: Create Page Inventory)
 
-For EACH visited page, create `pages/page-{n}.json`:
+**IMMEDIATELY after loading any page (before any other actions), create `pages/page-{n}.json`:**
 ```json
 {
   "schema_version": "1.0",
@@ -732,20 +984,33 @@ For EACH visited page, create `pages/page-{n}.json`:
   "errors_detected": false,
   "console_errors": [],
   "prd_features_checked": ["F1", "F3"],
-  "findings_on_page": []
+  "findings_on_page": [],
+  "observations": ["Notable observation about the page"]
 }
 ```
 
+**PAGE INVENTORY VALIDATION (MANDATORY):**
+After each page visit:
+1. Count files in `pages/*.json`
+2. Compare to `progress.json.coverage.pages_visited`
+3. **If mismatch:** Create missing page files before continuing
+4. Log any inventory corrections to activity_log
+
 **Same-origin rules:**
 - Same protocol + host + port = same origin
-- Subdomains are DIFFERENT origins (api.example.com ≠ example.com)
+- **Subdomain rule:** `api.example.com` ≠ `example.com` (DIFFERENT origins)
 - Never follow external domains
+- If different origin: Log "Skipped external link: {url}", do NOT add to queue
 
 **Link normalization:**
 - Strip query params for deduplication
 - Normalize trailing slashes
 - Resolve relative URLs to absolute
-- Exclude: mailto:, tel:, javascript:, #anchors
+- **Exclude these link types:**
+  - `mailto:` links
+  - `tel:` links
+  - `javascript:` links
+  - `#anchor` links (same-page navigation)
 
 **Screenshot Note:** Screenshots are captured via MCP and stored as reference IDs. These IDs reference images held in browser memory during the session.
 
@@ -761,22 +1026,34 @@ For EACH visited page, create `pages/page-{n}.json`:
 - Broken links → P2 finding
 - Screenshot and record each finding
 
-#### 4.6 Generate coverage-summary.md
-At end of exploration:
+#### 4.6 Generate coverage-summary.md (MANDATORY)
+At end of exploration, generate `coverage-summary.md`:
 ```markdown
 # Coverage Summary
 
 ## Routes
-- Found in code: 15
-- Visited in browser: 12
-- Not visited: 3 (listed below)
-  - /admin (requires auth)
-  - /api/internal (API only)
-  - /old-page (404)
+- Found in code: {N} (from code-analysis.json)
+- Visited in browser: {M}
+- Not visited: {N-M}
+  - /admin (reason: requires auth)
+  - /api/internal (reason: API only)
+  - /old-page (reason: 404)
 
-## Forms Discovered: 5
-## PRD Features Checked: 12 of 15
+## Forms Discovered
+- Total: {N}
+- Tested: {M}
+
+## PRD Features
+- Total: {N}
+- Checked: {M}
+- Not testable: {K}
+
+## Pages
+- Visited: {N}
+- Documented: {N} (must match pages/*.json count)
 ```
+
+**GATE CHECK:** `coverage-summary.md` MUST exist before Phase 7 (Finding Generation).
 
 ### Phase 5: Authentication & Data Safety (MANDATORY BEFORE BROWSER ACTIONS)
 
@@ -786,54 +1063,147 @@ At end of exploration:
 
 **Run this check BEFORE Phase 4 (browser exploration) begins.**
 
-1. **Read safety flags from config:**
-   ```yaml
-   environment:
-     is_production_data: true/false
-     safe_mode: true/false
-   ```
+##### 5.0.1 Environment Detection Hierarchy
 
-2. **If `is_production_data: true`:**
-   - Display warning: "⚠️ PRODUCTION DATA DETECTED"
-   - **MANDATORY: Use AskUserQuestion:**
-     ```
-     Production data detected. For safety, this audit should run in SAFE MODE.
-     Options: [Yes, use safe mode] [Abort audit]
-     ```
-   - If "Abort": Exit with "Audit aborted - user declined safe mode on production"
-   - If "Yes": Force `safe_mode: true` regardless of config setting
-   - Log: "Running in SAFE MODE (production data)"
-   - Skip ALL data creation/modification tests
+Determine environment mode using this precedence (highest to lowest):
 
-3. **Display Safety Status (MANDATORY):**
-   ```
-   ════════════════════════════════════════
-   SAFETY MODE: {ON / OFF}
-   Production Data: {Yes / No}
-   Destructive Tests: {Enabled / Disabled}
-   ════════════════════════════════════════
-   ```
+1. **CLI flag (highest priority):**
+   - `--full-mode` → `is_production_data: false`, `safe_mode: false`
+   - `--safe-mode` → `safe_mode: true`
+
+2. **config.yml explicit setting:**
+   - `is_production_data: true/false` if explicitly set (not null)
+
+3. **Hostname pattern matching (if no explicit config):**
+   - Match URL against `safe_hostnames` patterns → FULL MODE allowed
+   - Match URL against `production_hostnames` patterns → SAFE MODE
+   - Patterns support wildcards: `*.local`, `staging.*`
+
+4. **Default (if no match):** SAFE MODE (fail-safe)
+
+**Log detection source:**
+```json
+{
+  "environment_mode": "safe",
+  "detection_source": "hostname_pattern",
+  "matched_pattern": "*.prod.*",
+  "url": "https://app.prod.example.com"
+}
+```
+
+##### 5.0.2 Safety Mode Enforcement
+
+**If `is_production_data: true` (detected or explicit):**
+- Display warning: "⚠️ PRODUCTION DATA DETECTED"
+- **MANDATORY: Use AskUserQuestion:**
+  ```
+  Production data detected. For safety, this audit should run in SAFE MODE.
+  Options: [Yes, use safe mode] [Abort audit]
+  ```
+- If "Abort": Exit with "Audit aborted - user declined safe mode on production"
+- If "Yes": Force `safe_mode: true` regardless of config setting
+- Log: "Running in SAFE MODE (production data)"
+- Skip ALL data creation/modification tests
+
+##### 5.0.3 Action Classification System
+
+**Classify every interactive action BEFORE interaction:**
+
+| Category | Detection Patterns | Safe Mode | Full Mode |
+|----------|-------------------|-----------|-----------|
+| READ | Navigate, scroll, view, link click | ✅ Always | ✅ Always |
+| CREATE | Submit form, add, create, save, post | ❌ Skip | ✅ + Track |
+| UPDATE | Edit, save, toggle, update | ❌ Skip | ✅ + Track |
+| DELETE | Delete, remove, cancel, destroy | ❌ Skip | ⚠️ Confirm required |
+| DANGEROUS | Payment, purchase, account delete, refund, transfer | ❌ Skip | ❌ Never auto-execute |
+| UNKNOWN | Cannot classify | ❌ Skip | ⚠️ Confirm required (treat as DELETE) |
+
+**Classification precedence (highest to lowest):**
+1. DANGEROUS - if any DANGEROUS pattern matches, classify as DANGEROUS
+2. DELETE - if any DELETE pattern matches (and not DANGEROUS), classify as DELETE
+3. UPDATE - if update patterns match
+4. CREATE - if create patterns match
+5. READ - default for navigation/view actions
+6. UNKNOWN - only if no patterns match at all
+
+**Classification detection methods:**
+1. **Button/link text patterns:** Match against `action_classification` config patterns
+2. **URL patterns:** `/delete`, `/remove`, `/create`, `/update`, `/destroy`
+3. **Form attributes:** `method="POST"`, `method="DELETE"`, action URL
+4. **DOM event inspection:**
+   - Check `onclick` attributes for destructive keywords
+   - Check `data-action`, `data-method`, `data-confirm` attributes
+   - Detect modal triggers (`data-toggle="modal"`, `data-bs-toggle`)
+5. **Query params:** `?action=delete`, `?confirm=true`
+
+**Log classification decisions:**
+```json
+{
+  "element": "button.delete-btn",
+  "text": "Delete Account",
+  "classification": "DANGEROUS",
+  "detection_method": "text_pattern",
+  "action_taken": "skipped",
+  "reason": "DANGEROUS never auto-executed"
+}
+```
+
+##### 5.0.4 Display Safety Status (MANDATORY)
+
+```
+════════════════════════════════════════
+SAFETY MODE: {ON / OFF}
+Production Data: {Yes / No}
+Detection Source: {cli / config / hostname / default}
+Destructive Tests: {Enabled / Disabled}
+════════════════════════════════════════
+```
+
+**After displaying:**
+- Log to `progress.md`: "Safety mode: {ON/OFF}, Production data: {Yes/No}, Source: {source}"
+- Log to `progress.json` activity_log: `{"action": "Safety determined", "detail": "safe_mode={true/false}, production={true/false}, source={source}"}`
+- Add `test_mode` and `environment_detection_source` to progress.json
+- **GATE CHECK:** Safety determination MUST be logged before any browser exploration (Phase 4)
 
 4. **If `safe_mode: true`:**
    - Skip destructive actions (delete, remove, cancel, refund)
    - Skip form submissions that create real data
    - Log skipped actions: "Skipped: [action] (safe mode)"
 
-4. **Track test data created:**
-   Save to `test-data-created.json`:
-   ```json
-   {
-     "created_at": "2026-02-03T16:50:00",
-     "items": [
-       {
-         "type": "user",
-         "identifier": "test+audit-1234@testdomain.com",
-         "created_at": "2026-02-03T16:52:30",
-         "cleanup": "Delete via admin panel"
-       }
-     ]
-   }
-   ```
+##### 5.0.5 Test Data Tracking
+
+**Track ALL data-creating actions in `test-data-created.json`:**
+```json
+{
+  "schema_version": "1.0",
+  "audit_id": "20260204_211111",
+  "created_items": [
+    {
+      "type": "form_submit",
+      "url": "/api/users",
+      "data_summary": "Created user test+audit-1234@testdomain.com",
+      "timestamp": "2026-02-03T16:52:30Z",
+      "reversible": true,
+      "cleanup_method": "DELETE /api/users/{id}"
+    },
+    {
+      "type": "button_click",
+      "url": "/dashboard",
+      "element": "button.add-item",
+      "timestamp": "2026-02-03T16:53:00Z",
+      "reversible": false,
+      "cleanup_method": "Manual deletion via admin panel"
+    }
+  ],
+  "reset_instructions": "Run DELETE requests for reversible items. Manual cleanup required for irreversible items.",
+  "estimated_cleanup_time": "5 minutes"
+}
+```
+
+**After audit completion:**
+- Display cleanup summary if any data was created
+- Offer to run reversible cleanup actions
+- Provide manual cleanup instructions for irreversible items
 
 5. **Confirmation for irreversible actions:**
    Before any action that cannot be undone (even in non-safe mode):
@@ -980,12 +1350,53 @@ Record created users in `test-data-created.json`.
 
 #### 6.2 Form Testing
 
+**Form testing behavior depends on safety mode:**
+
+##### 6.2.1 Form Testing - Safe Mode
+
+**When `safe_mode: true` (production data):**
+1. **Observe only - NO submissions:**
+   - Document form structure (action URL, method, fields)
+   - Document validation attributes on each field
+   - Create findings for missing recommended validations
+   - Do NOT fill fields or submit forms
+
+2. **Record form observations in `page-{n}.json`:**
+   ```json
+   {
+     "forms_observed": [
+       {
+         "id": "settings-form",
+         "action": "/api/settings",
+         "method": "POST",
+         "fields": [
+           {"name": "email", "type": "email", "required": true, "maxlength": 255},
+           {"name": "name", "type": "text", "required": false, "maxlength": null}
+         ],
+         "validation_attributes_present": ["required", "maxlength"],
+         "missing_recommended_validations": ["pattern for email format"],
+         "test_status": "observation_only",
+         "reason": "safe_mode"
+       }
+     ]
+   }
+   ```
+
+3. **Create findings for validation gaps (observation-based):**
+   - Missing `required` on seemingly mandatory fields → P2 finding
+   - Missing `maxlength` on text fields → P3 finding
+   - Missing `pattern` on formatted fields (email, phone) → P2 finding
+
+##### 6.2.2 Form Testing - Full Mode
+
+**When `safe_mode: false` (non-production):**
+
 For each discovered form, run test suite:
 
 1. **Happy path:** Valid test data
 2. **Empty required:** Required fields empty
 3. **Invalid format:** Wrong data types
-4. **Boundary:** Max length, special characters
+4. **Boundary tests:** Using Boundary Testing Module (see 6.2.3)
 
 **Test data by field type:**
 - Email: `test@example.com`
@@ -1009,11 +1420,58 @@ For each discovered form, run test suite:
 - Timeout after 10 seconds
 - Retry once on timeout
 
+**Track all data created in `test-data-created.json`**
+
 **Record all form test results as findings:**
 - Validation failures where expected validation didn't trigger → P1 finding
 - Server errors during submission → P0 finding
 - Success when failure expected (e.g., invalid data accepted) → P1 finding
 - Unexpected behavior → P2 finding with `[NEEDS CLARIFICATION]`
+
+##### 6.2.3 Boundary Testing Module
+
+**Smart boundary derivation - used for form testing and edge case testing:**
+
+```
+derive_boundary(field):
+  1. Check HTML attributes (highest priority):
+     - maxlength → test at maxlength, maxlength+1
+     - minlength → test at minlength-1, minlength
+     - min/max (numbers) → test at min-1, min, max, max+1
+     - pattern → test valid pattern, invalid pattern
+
+  2. Check PRD field constraints (if available):
+     - Look for field specs in prd-summary.json
+     - Use PRD-specified limits if HTML attributes absent
+
+  3. Apply conservative defaults (if no hints):
+     - String: test at 255 chars (not 10000)
+     - Number: test at -1000 and 1000000 (not MAX_INT)
+     - Date: test at 10 years past and 10 years future
+
+  4. Log boundary source for each test:
+     - "html_attribute" | "prd_spec" | "default"
+```
+
+**Boundary test values:**
+```json
+{
+  "field": "username",
+  "type": "text",
+  "boundary_source": "html_attribute",
+  "html_maxlength": 50,
+  "tests": [
+    {"description": "at_limit", "value": "a".repeat(50), "expected": "accept"},
+    {"description": "over_limit", "value": "a".repeat(51), "expected": "reject"}
+  ]
+}
+```
+
+**IMPORTANT: No DoS-risk values:**
+- Never use 10000+ character strings
+- Never use MAX_INT or MIN_INT
+- Never use extreme dates (year 9999)
+- Always derive from actual constraints or use conservative defaults
 
 #### 6.3 Edge Case Generation
 
@@ -1041,7 +1499,88 @@ For each discovered form, run test suite:
 - Poor error message for boundary input → P2 finding
 - Double-submit creates duplicate data → P1 finding
 
-#### 6.4 Real-Time Feature Testing
+#### 6.4 Viewport/Responsive Testing
+
+**Test responsive behavior at 3 viewport sizes:**
+
+##### 6.4.1 Viewport Sizes
+
+| Name | Width | Height | Use Case |
+|------|-------|--------|----------|
+| Desktop | 1400 | 900 | Standard desktop |
+| Tablet | 768 | 1024 | iPad portrait |
+| Mobile | 375 | 667 | iPhone SE |
+
+##### 6.4.2 Test Procedure
+
+For each configured page (default: homepage + 2 key pages):
+
+1. **Resize window:**
+   ```
+   mcp__claude-in-chrome__resize_window(width, height)
+   ```
+
+2. **Take screenshot:**
+   - Save to `screenshots/page-{n}-{viewport}.png`
+
+3. **Check for horizontal overflow:**
+   ```javascript
+   // Via mcp__claude-in-chrome__javascript_tool
+   document.documentElement.scrollWidth > document.documentElement.clientWidth
+   ```
+   - If true: Create P2 finding "Horizontal overflow at {viewport}"
+
+4. **Verify navigation accessible:**
+   - On mobile: Check for hamburger menu (`.hamburger`, `[aria-label*="menu"]`, `.mobile-nav`)
+   - Verify menu can be opened
+   - If navigation not accessible: Create P1 finding
+
+5. **Test key interaction:**
+   - Search (if present): verify can type and submit
+   - Date picker (if present): verify can open and select
+   - If interaction fails at viewport: Create P2 finding
+
+##### 6.4.3 Record Results
+
+Add to `page-{n}.json`:
+```json
+{
+  "viewport_tests": [
+    {
+      "viewport": "desktop",
+      "width": 1400,
+      "height": 900,
+      "horizontal_overflow": false,
+      "navigation_accessible": true,
+      "interactions_tested": ["search"],
+      "findings": []
+    },
+    {
+      "viewport": "mobile",
+      "width": 375,
+      "height": 667,
+      "horizontal_overflow": true,
+      "navigation_accessible": true,
+      "interactions_tested": ["search"],
+      "findings": ["finding-005"]
+    }
+  ]
+}
+```
+
+##### 6.4.4 Configuration
+
+Limit viewport testing scope via config:
+```yaml
+responsive_test_pages:
+  - "/"                    # Homepage always
+  - "/dashboard"           # Key page
+  - "/settings"            # Forms page
+```
+
+Default: homepage + first 2 pages with forms.
+
+#### 6.5 Real-Time Feature Testing
 
 1. **Identify real-time features:**
    - UI labels: "Live", "Real-time"
@@ -1073,19 +1612,54 @@ For each discovered form, run test suite:
 
 5. **Flag failures as `[MAY BE FLAKY]`** — real-time features are timing-dependent
 
+#### 6.5 Record All Test Results as Findings (MANDATORY)
+
+**ALL test results that indicate issues MUST become findings:**
+
+| Test Result | Finding Severity |
+|-------------|------------------|
+| Form validation missing | P1 |
+| Server error during submit | P0 |
+| Invalid data accepted | P1 |
+| Unexpected behavior | P2 + `[NEEDS CLARIFICATION]` |
+| XSS/injection detected | P0 (security) |
+| Double-submit creates duplicate | P1 |
+| App crash or exception | P0 |
+| Data truncation without warning | P1 |
+| Poor error message | P2 |
+
+**For each issue discovered:**
+1. Create `findings/finding-{n}.json` with full schema
+2. Capture screenshot if possible
+3. Record reproduction steps
+4. Link to PRD feature if applicable
+5. Update progress.json findings count
+
 ### Phase 7: Finding Generation & Quality
 
-#### 7.1 Evidence Collection
+#### 7.1 Evidence Collection (MANDATORY - NO PLACEHOLDERS)
 
-For each finding, capture:
-- Screenshot at discovery (MCP screenshot ID)
-- URL where occurred
-- Element (selector or description)
-- Action that triggered it
+**Every finding MUST have these fields populated with real data:**
+
+**Required (will invalidate finding if missing):**
+- `screenshot_id`: MCP screenshot ID OR `null` with `screenshot_note` explaining why (e.g., "Session ended before capture")
+- `reproduction_steps`: Array with ≥1 meaningful step (NOT placeholder text)
+- `url`: Page URL where issue occurred
+- `expected`: What should happen
+- `actual`: What actually happened
+
+**Required (can be inferred):**
+- `element`: Selector or description of element
+- `prd_reference`: PRD section if traceable, or `null`
+- `feature_area`: Category (auth, forms, navigation, data, ui, error-handling)
 - Console errors (via `mcp__claude-in-chrome__read_console_messages`)
-- Reproduction steps from action log
-- Expected vs actual behavior
-- PRD section reference (if traceable)
+- Action that triggered it
+
+**If evidence cannot be captured:**
+- Do NOT create finding with placeholder values
+- Log to progress.md: "Potential issue on {url} but evidence incomplete - skipped"
+- Do NOT include in findings count
+- Move to next page/action
 
 Save to `.complete-agent/audits/current/findings/finding-{n}.json`
 
@@ -1094,7 +1668,8 @@ Save to `.complete-agent/audits/current/findings/finding-{n}.json`
 **Severity:**
 - **P0 (Showstopper):** Crash, data loss, security hole, core flow broken
 - **P1 (Significant):** Feature doesn't match spec, important edge case fails
-- **P2 (Polish):** UX confusion, minor visual issues
+- **P2 (Medium):** UX confusion, minor spec deviations
+- **P3 (Low/Polish):** Minor visual issues, nice-to-have improvements
 - **Question:** Ambiguous requirement, needs clarification
 
 **Confidence:**
@@ -1110,47 +1685,170 @@ Save to `.complete-agent/audits/current/findings/finding-{n}.json`
 - `ui`: Layout, styling
 - `error-handling`: Error states, recovery
 
-#### 7.3 LLM Critique Pass
+#### 7.3 Finding Verification Pass (MANDATORY)
 
-Before presenting findings, run critique:
-1. "Is this finding actionable? Can a developer fix it?"
-2. "Is this a real bug or intentional design?"
-3. "Are reproduction steps clear enough?"
-4. "Is severity appropriate?"
+**After all findings collected, BEFORE critique pass, verify each finding:**
 
-- Filter out `low` confidence findings
-- Improve vague descriptions
-- Mark uncertain as `[NEEDS CLARIFICATION]`
-- Save critique notes
+##### 7.3.1 Deterministic Wait Strategy
 
-#### 7.4 Deduplication
+```
+wait_for_page_ready():
+  1. Wait for DOMContentLoaded event
+  2. Check for active network requests (if detectable)
+  3. Check for loading indicators:
+     - No elements matching: .loading, .spinner, [aria-busy="true"]
+     - No skeleton screens (.skeleton, [data-loading])
+  4. Hard timeout: 3 seconds max after DOM ready
+  5. Return: ready | timeout_exceeded
+```
 
-1. Check for similar findings in current audit:
-   - Same page + same element = likely duplicate
-   - Similar error message = likely duplicate
+##### 7.3.2 Verification with Retry and Flakiness Detection
 
-2. Check existing GitHub issues:
-   - `gh issue list --search "[element] [error type]"`
-   - Flag as "previously reported" if similar exists
+**For each finding:**
+1. Navigate to finding URL
+2. Wait for page ready (using deterministic wait)
+3. Execute reproduction steps
+4. Check if issue still occurs
 
-3. Merge duplicates, keep best evidence
+**Retry strategy:**
+- Attempt reproduction 3 times (not 2)
+- Wait 2 seconds between attempts
+- Track success/failure for each attempt
+
+**Verification status based on results:**
+| Successes | Status | Action |
+|-----------|--------|--------|
+| 3/3 | `VERIFIED` | Include in report |
+| 2/3 | `VERIFIED` | Include in report |
+| 1/3 | `FLAKY` | Include with `[FLAKY]` warning label |
+| 0/3 | `COULD_NOT_REPRODUCE` | Mark but still include with note |
+
+**IMPORTANT: Do NOT auto-filter findings. Let user decide.**
+
+**Record verification in finding JSON:**
+```json
+{
+  "verification": {
+    "status": "FLAKY",
+    "attempts": 3,
+    "successes": 1,
+    "last_verified_at": "2026-02-04T10:30:00Z",
+    "notes": "Reproduces intermittently - may be timing-related"
+  }
+}
+```
+
+##### 7.3.3 Data-Dependent Findings
+
+**If finding depends on specific data state:**
+- Note data dependency in finding
+- Mark as `DATA_DEPENDENT` if data may have changed
+- Include data state in reproduction steps
+
+#### 7.4 LLM Critique Pass (MANDATORY)
+
+Before including any finding in the report, run self-critique:
+
+1. **Evaluate each finding:**
+   - "Is this finding actionable? Can a developer fix it?"
+   - "Is this a real bug or intentional design?"
+   - "Are reproduction steps clear enough?"
+   - "Is severity appropriate?"
+
+2. **Assign confidence score 0-100:**
+   - Evidence completeness: +30 (screenshot, steps, expected/actual)
+   - Reproduction success: +30 (3/3), +15 (2/3), +5 (1/3)
+   - PRD alignment: +20 (matches PRD requirement)
+   - Severity indicators: +20 (clear error state)
+
+3. **Confidence tiers (NO AUTO-FILTER):**
+   - <50: Mark as `[NEEDS HUMAN REVIEW]` (don't filter out!)
+   - 50-75: Medium confidence
+   - >75: High confidence
+
+4. **Log for user review:**
+   - All findings included in report
+   - Low-confidence findings clearly marked
+   - User makes final decision during review phase
+
+5. **Save critique metadata in finding JSON:**
+   ```json
+   "critique": {
+     "actionable": true,
+     "confidence_score": 65,
+     "confidence_tier": "medium",
+     "notes": "Clear validation bug with reproducible steps",
+     "needs_human_review": false
+   }
+   ```
+
+#### 7.6 Deduplication
+
+##### 7.6.1 Finding Signature System
+
+**Generate deterministic signature for each finding:**
+
+```
+signature = hash(
+  url_pattern +          // Canonicalized: /settings (not /settings?tab=1)
+  element_selector +     // CSS selector or description: input#email, "email input"
+  error_type +           // validation_missing, crash, 404, etc.
+  expected_behavior      // Normalized lowercase
+)
+```
+
+**Example:**
+```json
+{
+  "signature": "a1b2c3d4e5f6",
+  "signature_components": {
+    "url_pattern": "/settings",
+    "element": "input#email",
+    "error_type": "validation_missing",
+    "expected": "show error for invalid email"
+  }
+}
+```
+
+##### 7.6.2 Deduplication Logic
+
+1. **Within current audit:**
+   - Compute signature for new finding
+   - Search existing findings by signature
+   - Exact match: merge, keep best evidence
+   - >80% component match: flag for human review
+
+2. **Against previous audits (if schema compatible):**
+   - Exact match: mark as `RECURRING`
+   - No match in previous but exists now: mark as `NEW`
+   - Match in previous but not now: that finding is `FIXED`
+   - Was FIXED, now found again: mark as `REGRESSION`
+
+3. **Against GitHub issues:**
+   - Store signature in issue body: `<!-- signature:a1b2c3d4e5f6 -->`
+   - Search: `gh issue list --search "signature:a1b2c3d4e5f6"`
+   - If found: flag as "previously reported"
 
 4. **Save deduplication decisions in findings metadata:**
    ```json
    {
+     "signature": "a1b2c3d4e5f6",
      "dedup_status": "merged",
      "dedup_reason": "Same element on same page",
      "merged_with": "finding-003",
-     "existing_issue": null
+     "existing_issue": null,
+     "comparison_status": "NEW"
    }
    ```
    Or for previously reported:
    ```json
    {
+     "signature": "a1b2c3d4e5f6",
      "dedup_status": "previously_reported",
-     "dedup_reason": "Similar issue exists",
+     "dedup_reason": "Matching signature found in GitHub",
      "merged_with": null,
-     "existing_issue": "#42"
+     "existing_issue": "#42",
+     "comparison_status": "RECURRING"
    }
    ```
 
@@ -1226,20 +1924,35 @@ Present findings to user for approval using `AskUserQuestion`:
    - P2 (Polish): {count}
 
    How would you like to review?
-   Options: [Review all one by one] [Accept all P0, review rest] [Skip to report only]
+   Options:
+   - [Review all one by one]
+   - [Accept all and create issues]
+   - [Accept all P0, review rest]
+   - [Skip to report only]
    ```
 
-2. **Individual review (for each finding):**
+2. **Based on selection:**
+
+   **If "Review all one by one":**
+   Present each finding via AskUserQuestion:
    ```
    Finding #{n} [{severity}]: {title}
    URL: {url}
    Description: {description}
 
-   Options: [Accept - create issue] [Reject - not a bug] [Skip - decide later]
+   Options: [Accept - create issue] [Reject - not a bug] [Edit severity] [Skip]
    ```
+   - **Timeout:** 60 seconds per finding → default to "Skip"
+   - **Never auto-accept findings**
 
-   **If no response or timeout: default to "Skip"**
-   **Never auto-accept findings**
+   **If "Accept all and create issues":**
+   - Mark all findings as accepted
+   - Proceed to GitHub issue creation
+
+   **If "Skip to report only":**
+   - Mark all findings as "skipped"
+   - Do NOT create any issues
+   - Still create review-decisions.json and created-issues.json (with empty arrays)
 
 3. **Bulk actions (if requested):**
    - "Accept all P0 findings" → Still requires confirmation
@@ -1276,10 +1989,41 @@ Before creating any issues, verify:
 2. **gh authenticated:** `gh auth status`
 3. **Repo access:** `gh repo view --json nameWithOwner`
 
-If any check fails:
-- Show clear error message
-- Offer to save findings to `manual-issues.md` instead
-- Generate formatted issue templates for manual creation
+**If any check fails:**
+- Display: "GitHub CLI not available or not authenticated. Issues will be saved to manual-issues.md"
+- Generate `manual-issues.md` with formatted issue templates:
+  ```markdown
+  # Manual Issue Templates
+
+  Copy these to create GitHub issues manually.
+
+  ---
+
+  ## Issue 1: [P1] Form validation missing
+
+  **Title:** [P1] Form validation missing
+  **Labels:** bug, audit, P1
+
+  **Body:**
+  [Full issue body here]
+
+  ---
+  ```
+- Create `created-issues.json` with:
+  ```json
+  {
+    "schema_version": "1.0",
+    "created_at": "ISO8601",
+    "repo": null,
+    "method": "manual",
+    "issues": [],
+    "summary": {
+      "total_created": 0,
+      "findings_covered": 0,
+      "reason": "GitHub CLI not available - see manual-issues.md"
+    }
+  }
+  ```
 
 ##### Issue Creation Flow
 
@@ -1391,29 +2135,130 @@ Before issue creation, check screenshot capability:
 2. If upload fails: note "Screenshot upload failed" in issue
 3. If session ended: note "Screenshot unavailable (session ended)"
 
-#### 7.5 Privacy & Screenshot Retention
+#### 7.5 Screenshot Storage System
 
-1. **PII detection:**
-   - Flag screenshots containing: emails, phone numbers, names, addresses
+##### 7.5.1 Screenshot Directory Structure
+
+Create `screenshots/` directory in audit folder:
+```
+.complete-agent/audits/current/
+├── screenshots/
+│   ├── finding-001-full.png
+│   ├── finding-001-element.png
+│   ├── page-1-desktop.png
+│   ├── page-1-mobile.png
+│   └── ...
+└── screenshot_manifest.json
+```
+
+##### 7.5.2 Screenshot Manifest
+
+Track all screenshots in `screenshot_manifest.json`:
+```json
+{
+  "schema_version": "1.0",
+  "audit_id": "20260204_211111",
+  "total_size_bytes": 45000000,
+  "screenshots": [
+    {
+      "id": "ss_001",
+      "file_path": "screenshots/finding-001-full.png",
+      "captured_at": "2026-02-04T10:15:00Z",
+      "viewport": {"width": 1400, "height": 900},
+      "url": "/settings",
+      "type": "full",
+      "finding_id": "finding-001",
+      "file_size_bytes": 145000,
+      "uploaded_to_github": false
+    }
+  ]
+}
+```
+
+##### 7.5.3 Storage Limits
+
+**Enforce storage limits:**
+- Track cumulative size in manifest
+- At 80MB: Log warning "Approaching screenshot storage limit (80/100MB)"
+- At 100MB: Refuse new screenshots, log "Screenshot storage limit reached"
+- No automatic eviction - user decides via --cleanup
+
+**Storage limit handling:**
+```json
+{
+  "storage": {
+    "current_mb": 82,
+    "limit_mb": 100,
+    "warning_threshold_mb": 80,
+    "status": "warning",
+    "can_capture": true
+  }
+}
+```
+
+##### 7.5.4 PII Detection
+
+1. **Flag screenshots potentially containing PII:**
+   - Emails, phone numbers, names, addresses visible
    - Warn: "Screenshot may contain PII - review before sharing"
 
-2. **Screenshot storage model:**
-   - MCP screenshots are in-memory IDs (e.g., `ss_340070z01`) valid only during session
-   - These IDs are stored in finding JSON files
-   - For persistence, screenshots must be uploaded to GitHub issues during issue creation
-   - If session ends before issue creation, screenshot IDs become invalid
+2. **Add PII flag to manifest:**
+   ```json
+   {
+     "id": "ss_001",
+     "pii_warning": true,
+     "pii_reason": "Email address visible in form"
+   }
+   ```
 
-3. **Retention policy:**
-   - During session: screenshots exist as MCP in-memory IDs
-   - At issue creation: use `mcp__claude-in-chrome__upload_image` to embed in GitHub issue
-   - After successful upload: mark `screenshot_uploaded: true` in finding
-   - If upload fails: note in finding that screenshot was lost (session-only)
-   - Findings not promoted to issues: screenshots are lost when session ends (acceptable)
+##### 7.5.5 Retention Policy
 
-4. **Cleanup command:** `/complete-audit --cleanup`
-   - Delete test data tracking files from previous audits
-   - Delete findings marked as rejected
-   - Keep findings and reports for promoted issues
+- **During audit:** Screenshots saved to disk with metadata
+- **At issue creation:** Upload to GitHub and mark `uploaded_to_github: true`
+- **After review:** Delete screenshots for rejected findings
+- **Cleanup command:** Remove screenshots > 30 days old
+
+##### 7.5.6 Cleanup Command
+
+`/complete-audit --cleanup`:
+- Delete test data tracking files from previous audits
+- Delete screenshots for rejected findings
+- Delete audits older than 30 days
+- Keep findings and screenshots for promoted issues
+- Show summary of space reclaimed
+
+#### 8.5 Audit Completion Checklist (MANDATORY - Final Step)
+
+Before setting `status: "complete"` in progress.json, run this checklist:
+
+```
+═══════════════════════════════════════════════════
+  AUDIT COMPLETION CHECKLIST
+═══════════════════════════════════════════════════
+  Phase 1: prd-summary.json        [✓/✗]
+  Phase 2: code-analysis.json      [✓/✗]
+  Phase 3: progress.md             [✓/✗]
+  Phase 3: progress.json           [✓/✗]
+  Phase 4: pages/*.json            [{N} files]
+  Phase 4: coverage-summary.md     [✓/✗]
+  Phase 7: findings/*.json         [{N} files]
+  Phase 8: report.md               [✓/✗]
+  Phase 8: review-decisions.json   [✓/✗]
+  Phase 8: created-issues.json     [✓/✗]
+═══════════════════════════════════════════════════
+```
+
+**If ANY required artifact is missing:**
+1. Attempt to create with minimal valid schema
+2. If still missing after attempt: Mark audit `status: "incomplete"` with reason
+3. Log missing artifacts to progress.json
+
+**Only set `status: "complete"` when ALL artifacts present.**
+
+**Cleanup on completion:**
+- Delete any `stop.flag` or `continue.flag`
+- Log to activity_log: "Audit complete"
+- Display final summary to user
 
 ### Phase 9: Verification Mode
 
@@ -1521,8 +2366,14 @@ Improve robustness and handle edge cases.
 
 #### 10.1 Checkpoint & Resume
 
-**Save checkpoint** after each major action:
+**Save `checkpoint.json` after:**
+- Each page visit
+- Each finding creation
+- Before any pause (OAuth, email verification)
+- Before any stop (stop.flag detected)
+- Before any timeout exit
 
+**Checkpoint schema:**
 ```json
 {
   "checkpoint_at": "2026-02-03T17:00:00Z",
@@ -1530,7 +2381,9 @@ Improve robustness and handle edge cases.
   "exploration_queue": ["/profile", "/billing"],
   "visited_pages": ["/", "/dashboard", "/settings"],
   "findings_so_far": 3,
-  "current_permission_level": "admin"
+  "current_permission_level": "admin",
+  "phase": "4",
+  "last_action": "Page visit"
 }
 ```
 
@@ -1539,16 +2392,21 @@ Save to `.complete-agent/audits/current/checkpoint.json`
 **Resume with:** `/complete-audit --resume`
 
 **Resume flow:**
-1. Check if checkpoint.json exists:
+1. **Check if checkpoint.json exists:**
    - If missing: error with "No checkpoint found. Run `/complete-audit` to start a new audit."
-2. Read checkpoint.json
-3. Validate JSON (if corrupted, warn and offer fresh start)
-4. Check age (if >24h, warn about stale state)
-5. Restore state:
+2. **Read checkpoint.json**
+3. **Validate JSON:**
+   - If corrupted: warn user and offer fresh start via AskUserQuestion
+4. **Check age:**
+   - If >24h: warn about stale state via AskUserQuestion
+   - "Checkpoint is {N} hours old. Continue anyway? [Yes/Start fresh]"
+5. **Restore state:**
    - Navigate to current_url
    - Restore exploration_queue
+   - Set findings count
    - Continue from last position
-6. Update progress.md: "Resumed from checkpoint"
+6. **Update progress.md:** "Resumed from checkpoint at {timestamp}"
+7. **Log to activity_log:** "Resumed from checkpoint"
 
 #### 10.2 Error Recovery
 
@@ -1606,19 +2464,32 @@ All JSON files use these schemas with `schema_version` for forward compatibility
 ```json
 {
   "schema_version": "1.0",
-  "status": "running|paused|complete",
+  "audit_id": "20260204_211111",
+  "target_url": "https://example.com",
+  "status": "running|paused|stopped|complete",
   "pause_reason": "string|null",
   "started_at": "ISO8601",
   "updated_at": "ISO8601",
   "current_url": "string|null",
+  "test_mode": "safe|full",
+  "environment_detection_source": "cli|config|hostname|default",
   "coverage": {
     "pages_visited": 0,
     "pages_in_queue": 0,
-    "pages_total": 0
+    "pages_total": 0,
+    "forms_tested": 0,
+    "features_checked": 0
   },
+  "routes_by_pattern": {
+    "/users/{id}": {"instances_visited": 3, "max": 5},
+    "/settings": {"instances_visited": 1, "max": 1}
+  },
+  "unique_patterns_visited": 12,
   "findings": {
     "total": 0,
-    "by_severity": {"P0": 0, "P1": 0, "P2": 0}
+    "by_severity": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+    "by_verification": {"VERIFIED": 0, "FLAKY": 0, "COULD_NOT_REPRODUCE": 0},
+    "by_comparison": {"NEW": 0, "RECURRING": 0, "FIXED": 0, "REGRESSION": 0}
   },
   "activity_log": [
     {"timestamp": "ISO8601", "action": "string", "detail": "string"}
@@ -1668,20 +2539,45 @@ All JSON files use these schemas with `schema_version` for forward compatibility
 }
 ```
 
-### Finding Storage Format (per D.2 schema)
+### Finding Schema Versioning
+
+**All findings use versioned schemas for comparison compatibility:**
+
+1. **Schema version in all finding files:**
+   - Current version: `"schema_version": "1.0"`
+   - Version changes when breaking changes occur
+
+2. **Compatibility rules:**
+   - Same major version (1.x): fully compatible, can compare
+   - Different major version: incompatible, skip comparison
+
+3. **On audit start, check previous audit schema:**
+   - Load previous findings
+   - Compare schema_version
+   - If incompatible: log warning, skip audit comparison
+   - If compatible: proceed with finding comparison using 7.6 Deduplication
+
+4. **Finding comparison (when compatible):**
+   - Use finding signature for matching (see 7.6)
+   - Classify as: NEW, RECURRING, FIXED, REGRESSION
+
+### Finding Storage Format
 
 ```json
 {
   "schema_version": "1.0",
   "id": "finding-001",
   "severity": "P1",
-  "confidence": "high",
+  "confidence_score": 75,
+  "confidence_tier": "high",
   "title": "Form validation missing on /settings",
   "description": "Email field accepts invalid input without showing validation error",
   "url": "/settings",
   "element": "email input",
   "screenshot_id": "ss_finding_001",
+  "screenshot_path": "screenshots/finding-001-full.png",
   "screenshot_uploaded": false,
+  "screenshot_note": null,
   "reproduction_steps": [
     "Navigate to /settings",
     "Enter 'notanemail' in email field",
@@ -1693,10 +2589,33 @@ All JSON files use these schemas with `schema_version` for forward compatibility
   "feature_area": "settings",
   "created_at": "2026-02-03T17:00:00Z",
   "issue_number": null,
+  "signature": "a1b2c3d4e5f6",
+  "signature_components": {
+    "url_pattern": "/settings",
+    "element": "input#email",
+    "error_type": "validation_missing",
+    "expected": "show error for invalid email"
+  },
+  "verification": {
+    "status": "VERIFIED",
+    "attempts": 3,
+    "successes": 3,
+    "last_verified_at": "2026-02-04T10:30:00Z",
+    "notes": null
+  },
+  "comparison_status": "NEW",
+  "critique": {
+    "actionable": true,
+    "confidence_score": 75,
+    "confidence_tier": "high",
+    "notes": "Clear validation bug with reproducible steps",
+    "needs_human_review": false
+  },
   "deduplication": {
     "is_duplicate": false,
     "duplicate_of": null,
-    "reason": null
+    "reason": null,
+    "existing_issue": null
   }
 }
 ```

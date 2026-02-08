@@ -32,6 +32,9 @@ import {
 } from './browser-phase-helpers.js';
 import type { AuditConfig } from './config.js';
 import { runQualityPipelineAndSave } from './finding-quality-pipeline.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { getProgressPath, getPageDir, getFindingDir } from './artifact-paths.js';
 
 /**
  * Register all phase handlers with the dispatcher.
@@ -64,6 +67,8 @@ export function initializePhaseHandlers(browser?: PlaywrightBrowser): void {
   });
 
   registerPureTsHandler('reporting', (ctx: DispatchContext) => {
+    // Update progress with page and finding counts before generating report
+    updateProgressMetrics(ctx.auditDir);
     return generateReport(ctx.auditDir);
   });
 
@@ -131,5 +136,59 @@ export function initializePhaseHandlers(browser?: PlaywrightBrowser): void {
     registerBrowserCollector('verification', (ctx) =>
       collectVerificationData(ctx, browser),
     );
+  }
+}
+
+/**
+ * Update progress.json with actual page/finding counts before report generation.
+ */
+function updateProgressMetrics(auditDir: string): void {
+  const progressPath = getProgressPath(auditDir);
+  if (!fs.existsSync(progressPath)) return;
+
+  try {
+    const progress = JSON.parse(fs.readFileSync(progressPath, 'utf-8'));
+
+    // Count pages from pages directory
+    const pageDir = getPageDir(auditDir);
+    let pageCount = 0;
+    if (fs.existsSync(pageDir)) {
+      pageCount = fs.readdirSync(pageDir).filter((f) => f.endsWith('.json')).length;
+    }
+
+    // Count findings from findings directory
+    const findingDir = getFindingDir(auditDir);
+    let findingCount = 0;
+    const severityCounts: Record<string, number> = { P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 };
+    if (fs.existsSync(findingDir)) {
+      const files = fs.readdirSync(findingDir).filter((f) => f.endsWith('.json'));
+      findingCount = files.length;
+      for (const file of files) {
+        try {
+          const finding = JSON.parse(fs.readFileSync(path.join(findingDir, file), 'utf-8'));
+          const sev = finding.severity as string;
+          if (sev in severityCounts) severityCounts[sev]++;
+        } catch { /* skip */ }
+      }
+    }
+
+    // Update metrics
+    progress.metrics = progress.metrics || {};
+    progress.metrics.pages_visited = pageCount;
+    progress.metrics.pages_total = pageCount;
+    progress.metrics.findings_total = findingCount;
+    progress.metrics.findings_by_severity = severityCounts;
+
+    // Also set coverage for report generator
+    progress.coverage = {
+      pages_visited: pageCount,
+      forms_tested: 0,
+      features_checked: 0,
+    };
+
+    progress.updated_at = new Date().toISOString();
+    fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2), 'utf-8');
+  } catch (error) {
+    console.warn(`[PhaseInit] Warning: Failed to update progress metrics: ${error}`);
   }
 }

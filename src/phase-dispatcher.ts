@@ -9,10 +9,12 @@
  * @module phase-dispatcher
  */
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type PhaseName, type PhaseType, getPhaseConfig } from './phase-registry.js';
 import { type LLMClient, type LLMResponse } from './llm/anthropic-client.js';
 import { loadPrompt, interpolateVariables } from './llm/prompt-loader.js';
+import { getFindingDir } from './artifact-paths.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -261,12 +263,11 @@ async function dispatchBrowserClaude(
 
   // Step 1: Collect browser data if a collector is registered
   const collector = browserCollectors[phaseName];
-  let enrichedContext = { ...context };
+  let browserData: Record<string, unknown> | undefined;
 
   if (collector) {
     try {
-      const browserData = await collector(context);
-      enrichedContext = { ...enrichedContext, browserData };
+      browserData = await collector(context);
     } catch (error) {
       console.warn(
         `[Dispatcher] Browser collector for ${phaseName} failed: ${error}. Proceeding without browser data.`,
@@ -274,10 +275,74 @@ async function dispatchBrowserClaude(
     }
   }
 
-  // Step 2: Load prompt, interpolate, call LLM
+  // Step 2: Load PRD features context if available
+  let prdContext = '';
+  const prdSummaryPath = path.join(context.auditDir, 'prd-summary.json');
+  if (fs.existsSync(prdSummaryPath)) {
+    try {
+      const prdData = JSON.parse(fs.readFileSync(prdSummaryPath, 'utf-8'));
+      const features = prdData.features || prdData;
+      if (Array.isArray(features)) {
+        prdContext = features.map((f: any) =>
+          `- ${f.id || ''}: ${f.name || f.title || ''} [${f.priority || 'must'}] ${f.acceptance_criteria ? '| AC: ' + (Array.isArray(f.acceptance_criteria) ? f.acceptance_criteria.join('; ') : f.acceptance_criteria) : ''}`
+        ).join('\n');
+      }
+    } catch { /* skip */ }
+  }
+
+  // Step 3: Build analysis prompt with collected data injected
   const resolved = resolvePromptPath(promptPath);
   const template = loadPrompt(resolved);
-  const prompt = interpolateVariables(template, buildPromptVariables(enrichedContext));
+  const enrichedContext = { ...context, browserData };
+  const interpolated = interpolateVariables(template, buildPromptVariables(enrichedContext));
+
+  // Build the actual analysis prompt that includes collected data
+  const dataSection = browserData
+    ? `\n\n## COLLECTED BROWSER DATA\n\nThe following data was automatically collected by visiting the application pages with a headless browser. Analyze this data to identify issues.\n\n\`\`\`json\n${JSON.stringify(browserData, null, 2).substring(0, 50000)}\n\`\`\``
+    : '\n\n## NOTE: No browser data was collected for this phase.';
+
+  const prdSection = prdContext
+    ? `\n\n## PRD FEATURES TO CHECK\n\n${prdContext}`
+    : '';
+
+  const outputInstruction = `\n\n## REQUIRED OUTPUT FORMAT
+
+You are analyzing pre-collected browser data. Do NOT describe how you would explore the app - the exploration is already done. Instead, analyze the collected data and produce findings.
+
+Return a JSON object with this structure:
+\`\`\`json
+{
+  "findings": [
+    {
+      "id": "F-001",
+      "title": "Short description of the issue",
+      "severity": "P0|P1|P2|P3|P4",
+      "type": "functionality|ui|performance|security|accessibility",
+      "url": "https://...",
+      "description": "Detailed description of what is wrong",
+      "expected_behavior": "What the PRD or best practices say should happen",
+      "actual_behavior": "What actually happens based on the collected data",
+      "prd_feature": "Feature ID from PRD if applicable",
+      "reproduction_steps": ["step 1", "step 2"],
+      "confidence": 85,
+      "evidence": "Specific data from the collected browser data that supports this finding"
+    }
+  ],
+  "summary": "Brief summary of analysis"
+}
+\`\`\`
+
+Severity guide:
+- P0 (Critical): App crashes, data loss, security vulnerability, complete feature missing
+- P1 (High): Major functionality broken, significant UX issue, key PRD requirement unmet
+- P2 (Medium): Feature partially works, minor PRD gap, UI inconsistency
+- P3 (Low): Minor polish issue, nice-to-have missing, cosmetic
+- P4 (Info): Observation, suggestion, not a bug
+
+Be specific and evidence-based. Only report findings you can support with the collected data.
+If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
+
+  const prompt = interpolated + dataSection + prdSection + outputInstruction;
 
   const response = await llmClient.complete(prompt, {
     maxTokens: 8192,
@@ -286,10 +351,56 @@ async function dispatchBrowserClaude(
 
   recordCost(enrichedContext, response);
 
+  // Step 4: Extract findings from LLM response and save to findings directory
+  const extractedFindings = extractFindings(response.content);
+  if (extractedFindings.length > 0) {
+    const findingDir = getFindingDir(context.auditDir);
+    fs.mkdirSync(findingDir, { recursive: true });
+
+    for (const finding of extractedFindings) {
+      const findingId = finding.id || `F-${String(extractedFindings.indexOf(finding) + 1).padStart(3, '0')}`;
+      finding.id = findingId;
+      finding.phase = phaseName;
+      finding.discovered_at = new Date().toISOString();
+
+      const findingPath = path.join(findingDir, `${findingId}.json`);
+      fs.writeFileSync(findingPath, JSON.stringify(finding, null, 2), 'utf-8');
+    }
+
+    console.log(`[Dispatcher] ${phaseName}: extracted ${extractedFindings.length} findings`);
+  }
+
   return {
     success: true,
     output: response.content,
     phaseType: 'browser-claude',
     durationMs: Date.now() - start,
   };
+}
+
+/**
+ * Extract findings array from LLM response content.
+ * Handles JSON wrapped in markdown code blocks or raw JSON.
+ */
+function extractFindings(content: string): Record<string, unknown>[] {
+  // Try to extract JSON from markdown code blocks
+  const jsonMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  const jsonStr = jsonMatch ? jsonMatch[1] : content;
+
+  try {
+    const parsed = JSON.parse(jsonStr.trim());
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed.findings && Array.isArray(parsed.findings)) return parsed.findings;
+    return [];
+  } catch {
+    // Try to find JSON object in the content
+    const objectMatch = content.match(/\{[\s\S]*"findings"[\s\S]*\}/);
+    if (objectMatch) {
+      try {
+        const parsed = JSON.parse(objectMatch[0]);
+        if (parsed.findings && Array.isArray(parsed.findings)) return parsed.findings;
+      } catch { /* give up */ }
+    }
+    return [];
+  }
 }

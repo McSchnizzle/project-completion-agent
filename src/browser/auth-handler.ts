@@ -257,17 +257,48 @@ async function applyFormLogin(
         .catch(() => null);
     }
 
-    // Verify login success
+    // Verify login success - check both URL patterns and CSS selectors
     if (config.successIndicator) {
-      try {
-        await page.waitForSelector(config.successIndicator, { timeout: 5_000 });
-      } catch {
-        await page.close();
-        return {
-          success: false,
-          strategy: 'form-login',
-          message: `Login may have failed: success indicator "${config.successIndicator}" not found`,
-        };
+      const indicators = config.successIndicator.split(',').map((s) => s.trim());
+      let verified = false;
+
+      // Wait a moment for navigation to settle
+      await page.waitForTimeout(2000).catch(() => {});
+
+      for (const indicator of indicators) {
+        // URL path patterns (starts with /)
+        if (indicator.startsWith('/')) {
+          const currentUrl = page.url();
+          if (currentUrl.includes(indicator)) {
+            verified = true;
+            break;
+          }
+        } else {
+          // CSS selector
+          try {
+            await page.waitForSelector(indicator, { timeout: 3_000 });
+            verified = true;
+            break;
+          } catch {
+            // Try next indicator
+          }
+        }
+      }
+
+      if (!verified) {
+        // Check current URL one more time after all attempts
+        const finalUrl = page.url();
+        const urlMatched = indicators.some(
+          (ind) => ind.startsWith('/') && finalUrl.includes(ind),
+        );
+        if (!urlMatched) {
+          await page.close();
+          return {
+            success: false,
+            strategy: 'form-login',
+            message: `Login may have failed: no success indicator matched (tried: ${indicators.join(', ')}, current URL: ${finalUrl})`,
+          };
+        }
       }
     }
 

@@ -113,10 +113,12 @@ export async function runAudit(config: AuditConfig): Promise<AuditResult> {
   // Step 2b: Create Playwright browser if needed
   let playwrightBrowser: PlaywrightBrowser | undefined;
   if (config.browser !== 'none') {
-    playwrightBrowser = new PlaywrightBrowser();
+    playwrightBrowser = new PlaywrightBrowser({
+      authConfig: config.authConfig,
+    });
     try {
       await playwrightBrowser.launch();
-      console.log(`[Orchestrator] Playwright browser launched`);
+      console.log(`[Orchestrator] Playwright browser launched${config.authConfig ? ` (auth: ${config.authConfig.strategy})` : ''}`);
     } catch (error) {
       console.warn(`[Orchestrator] Warning: Failed to launch Playwright browser: ${error}`);
       console.warn(`[Orchestrator] Browser phases will proceed without browser data`);
@@ -179,7 +181,7 @@ export async function runAudit(config: AuditConfig): Promise<AuditResult> {
   }
 
   // Step 6: Initialize progress tracking
-  initializeProgress(auditDir, config.auditId, allPhases.map((p) => p.id));
+  initializeProgress(auditDir, config.auditId, allPhases.map((p) => p.id), config);
 
   // Mark already-completed phases
   for (const phase of completedPhases) {
@@ -971,13 +973,14 @@ async function runPhasesParallel(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function initializeProgress(auditDir: string, auditId: string, phases: PhaseName[]): void {
+function initializeProgress(auditDir: string, auditId: string, phases: PhaseName[], config?: AuditConfig): void {
   const progressPath = getProgressPath(auditDir);
 
   const progress = {
     schema_version: '1.0.0',
     audit_id: auditId,
     started_at: new Date().toISOString(),
+    target_url: config?.url || '',
     status: 'running',
     stages: {} as Record<string, any>,
     metrics: {

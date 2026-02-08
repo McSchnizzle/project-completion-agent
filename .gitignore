@@ -14,5 +14,10 @@ node_modules/
 # Claude checkpoints (session-specific)
 .agents/outputs/claude_checkpoints/
 
+# Environment (secrets)
+.env
+.env.local
+.env.*.local
+
 # OS files
 .DS_Store

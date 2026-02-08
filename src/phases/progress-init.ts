@@ -132,11 +132,12 @@ export function initProgress(auditDir: string, config: AuditConfig): ProgressSta
   }
 
   // Create initial state
-  const state: ProgressState = {
+  const state: ProgressState & { target_url?: string } = {
     schema_version: '1.0.0',
     audit_id: config.auditId,
     started_at: now,
     updated_at: now,
+    target_url: config.url,
     status: 'running',
     current_stage: null,
     stages,

@@ -80,8 +80,10 @@ export function parseAuthConfig(configYml: Record<string, unknown>): AuthConfig 
 
     case 'form-login': {
       const loginUrl = raw.login_url ?? raw.loginUrl;
-      const username = raw.username;
-      const password = raw.password;
+      // Support both flat (username/password) and nested (credentials.username/password)
+      const creds = raw.credentials as Record<string, unknown> | undefined;
+      const username = raw.username ?? creds?.username;
+      const password = raw.password ?? creds?.password;
 
       if (!loginUrl || !username || !password) {
         return { strategy: 'none' };
@@ -94,17 +96,17 @@ export function parseAuthConfig(configYml: Record<string, unknown>): AuthConfig 
           username: String(username),
           password: String(password),
         },
-        usernameSelector: raw.username_selector
-          ? String(raw.username_selector)
+        usernameSelector: raw.username_selector ?? raw.usernameSelector
+          ? String(raw.username_selector ?? raw.usernameSelector)
           : undefined,
-        passwordSelector: raw.password_selector
-          ? String(raw.password_selector)
+        passwordSelector: raw.password_selector ?? raw.passwordSelector
+          ? String(raw.password_selector ?? raw.passwordSelector)
           : undefined,
-        submitSelector: raw.submit_selector
-          ? String(raw.submit_selector)
+        submitSelector: raw.submit_selector ?? raw.submitSelector
+          ? String(raw.submit_selector ?? raw.submitSelector)
           : undefined,
-        successIndicator: raw.success_indicator
-          ? String(raw.success_indicator)
+        successIndicator: raw.success_indicator ?? raw.successIndicator
+          ? String(raw.success_indicator ?? raw.successIndicator)
           : undefined,
       };
     }

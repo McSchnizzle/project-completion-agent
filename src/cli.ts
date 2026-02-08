@@ -9,11 +9,13 @@
  */
 
 import { parseArgs } from 'node:util';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { buildConfig, AuditConfig } from './config.js';
 import { runAudit, runVerify, type AuditResult, type VerifyResult } from './orchestrator.js';
 
 /** Version extracted from package.json */
-const VERSION = '0.75.2';
+const VERSION = '0.75.3';
 
 /** Parsed CLI arguments ready to pass to buildConfig */
 export type CliArgs = Partial<AuditConfig> & {
@@ -269,8 +271,38 @@ export async function main(): Promise<void> {
     console.log('CI environment detected - enabling non-interactive mode');
   }
 
+  // Load config.yml from the target codebase if available
+  const codebasePath = cliArgs.codebasePath || process.env.AUDIT_CODEBASE_PATH || '';
+  let configYml: Record<string, unknown> = {};
+  if (codebasePath) {
+    const configPath = path.resolve(codebasePath, '.complete-agent', 'config.yml');
+    if (fs.existsSync(configPath)) {
+      try {
+        const YAML = require('yaml');
+        const raw = YAML.parse(fs.readFileSync(configPath, 'utf-8'));
+        // Flatten nested config.yml structure for buildConfig
+        // config.yml uses: target.url, target.codebase_path, target.prd_path, testing.*, exploration.*
+        if (raw && typeof raw === 'object') {
+          const target = raw.target as Record<string, unknown> | undefined;
+          const testing = raw.testing as Record<string, unknown> | undefined;
+          const exploration = raw.exploration as Record<string, unknown> | undefined;
+          configYml = {
+            ...(target || {}),
+            ...(testing || {}),
+            ...(exploration || {}),
+            auth: raw.auth,
+            browser: raw.browser?.headless !== undefined ? 'playwright' : undefined,
+          };
+        }
+        console.log(`[CLI] Loaded config from ${configPath}`);
+      } catch (error) {
+        console.warn(`[CLI] Warning: Failed to parse ${configPath}: ${error}`);
+      }
+    }
+  }
+
   // Build the final configuration
-  const config = buildConfig(cliArgs);
+  const config = buildConfig(cliArgs, configYml);
 
   // Validate required fields
   if (!config.url) {

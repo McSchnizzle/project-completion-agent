@@ -59,14 +59,18 @@ interface PrdSummary {
 }
 
 /**
- * Page inventory structure
+ * Page inventory structure (supports both legacy and browser-collector formats)
  */
 interface PageInventory {
-  page_number: number;
+  page_number?: number;
   url: string;
   title: string;
-  visited_at: string;
+  visited_at?: string;
   features_checked?: Record<string, { status: string; notes: string }>;
+  forms?: Array<{ action: string; method: string; fields?: unknown[] }>;
+  links?: string[];
+  statusCode?: number;
+  loadTimeMs?: number;
 }
 
 /**
@@ -207,7 +211,7 @@ function loadPages(auditDir: string): PageInventory[] {
     }
   }
 
-  return pages.sort((a, b) => a.page_number - b.page_number);
+  return pages.sort((a, b) => (a.page_number ?? 0) - (b.page_number ?? 0));
 }
 
 /**
@@ -248,9 +252,12 @@ function generateExecutiveSummary(
   const coverage = progress.coverage;
   const featureCount = prdSummary?.summary.total_features ?? 0;
 
+  // Use page count from progress OR count pages directly
+  const pageCount = coverage?.pages_visited || 0;
+
   return `## Executive Summary
 
-This audit discovered **${findings.length} findings** across ${coverage?.pages_visited ?? 0} pages${
+This audit discovered **${findings.length} findings** across ${pageCount} pages${
     featureCount > 0 ? ` covering ${featureCount} features` : ''
   }.
 
@@ -398,9 +405,12 @@ function generatePagesExplored(pages: PageInventory[]): string {
   }
 
   const rows = pages
-    .map((p) => {
+    .map((p, index) => {
       const featureCount = p.features_checked ? Object.keys(p.features_checked).length : 0;
-      return `| ${p.page_number} | [${p.title}](${p.url}) | ${featureCount} | ${new Date(p.visited_at).toLocaleString()} |`;
+      const pageNum = p.page_number ?? (index + 1);
+      const visitedAt = p.visited_at ? new Date(p.visited_at).toLocaleString() : (p.loadTimeMs ? `${p.loadTimeMs}ms load` : '-');
+      const title = p.title || p.url;
+      return `| ${pageNum} | [${title}](${p.url}) | ${featureCount} | ${visitedAt} |`;
     })
     .join('\n');
 

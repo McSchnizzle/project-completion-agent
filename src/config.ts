@@ -12,6 +12,9 @@
  * @module config
  */
 
+import type { AuthConfig } from './browser/auth-handler.js';
+import { parseAuthConfig } from './auth-config.js';
+
 /**
  * Complete configuration for a single audit run.
  *
@@ -77,6 +80,11 @@ export interface AuditConfig {
    * (production URLs default to safe-mode enabled).
    */
   safeMode?: boolean;
+
+  // -- Auth --
+
+  /** Authentication configuration for browser sessions. */
+  authConfig?: AuthConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +238,10 @@ export function buildConfig(
   const envParallel = parseBool(env.AUDIT_PARALLEL);
   if (envParallel !== undefined) fromEnv.parallel = envParallel;
 
+  // ---- Parse auth config from config.yml ---------------------------------
+
+  const authConfig = parseAuthConfig(configYml);
+
   // ---- Merge (cli > env > yml > defaults) -------------------------------
 
   const merged: AuditConfig = {
@@ -238,6 +250,11 @@ export function buildConfig(
     ...fromEnv,
     ...cliArgs,
   };
+
+  // Attach auth config if a strategy was found (not 'none')
+  if (authConfig.strategy !== 'none') {
+    merged.authConfig = merged.authConfig ?? authConfig;
+  }
 
   // Generate an audit ID if none was provided at any layer
   if (!merged.auditId) {

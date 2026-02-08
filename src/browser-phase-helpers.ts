@@ -320,62 +320,111 @@ export async function collectFindingQualityData(
 }
 
 /**
+ * Load existing finding JSON files from the findings directory.
+ */
+function loadExistingFindings(findingDir: string): any[] {
+  if (!fs.existsSync(findingDir)) return [];
+
+  const files = fs.readdirSync(findingDir).filter((f) => f.endsWith('.json'));
+  const findings: any[] = [];
+
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(path.join(findingDir, file), 'utf-8');
+      findings.push(JSON.parse(content));
+    } catch {
+      // Skip malformed files
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Check whether a finding URL is valid and visitable.
+ */
+function isVisitableUrl(url: unknown): url is string {
+  return (
+    typeof url === 'string' &&
+    url !== 'N/A' &&
+    url !== 'undefined' &&
+    url !== '' &&
+    url.startsWith('http')
+  );
+}
+
+/**
  * Verification: re-check previously found issues with fresh browser visits.
+ *
+ * Separates findings into verifiable (valid URL) and unverifiable (bad URL),
+ * then visits pages for verifiable findings. Returns structured data so
+ * the dispatcher can update existing findings rather than creating new ones.
  */
 export async function collectVerificationData(
   context: DispatchContext,
   browser: PlaywrightBrowser,
 ): Promise<Record<string, unknown>> {
   const findingDir = getFindingDir(context.auditDir);
-  const screenshotCapture = new ScreenshotCapture(context.auditDir);
-  const verified: any[] = [];
+  const findings = loadExistingFindings(findingDir);
 
-  if (fs.existsSync(findingDir)) {
-    const files = fs
-      .readdirSync(findingDir)
-      .filter((f) => f.endsWith('.json'));
-    for (const file of files) {
-      try {
-        const finding = JSON.parse(
-          fs.readFileSync(path.join(findingDir, file), 'utf-8'),
-        );
-        const findingUrl =
-          finding.url ?? finding.location?.url;
-        if (findingUrl) {
-          const page = await browser.visitPage(findingUrl);
-          const hasScreenshot = !!page.screenshot;
+  // Partition findings by URL validity
+  const verifiableFindings: any[] = [];
+  const unverifiableFindings: any[] = [];
 
-          if (page.screenshot) {
-            await screenshotCapture.capture(
-              page.screenshot,
-              findingUrl,
-              { width: 1280, height: 720 },
-              {
-                purpose: 'verification',
-                suffix: `verify-${finding.id || file.replace('.json', '')}`,
-              },
-            );
-          }
-
-          verified.push({
-            ...finding,
-            verificationScreenshot: hasScreenshot,
-            verificationHtml: page.html.substring(0, 2000),
-            verificationConsoleErrors: page.consoleMessages.filter(
-              (m: any) => m.type === 'error',
-            ),
-            verificationNetworkErrors: page.networkErrors,
-          });
-        } else {
-          verified.push(finding);
-        }
-      } catch (error) {
-        console.warn(
-          `[Verification] Failed for finding ${file}: ${error}`,
-        );
-      }
+  for (const finding of findings) {
+    const url = finding.url || finding.evidence?.url || finding.location?.url;
+    if (isVisitableUrl(url)) {
+      verifiableFindings.push(finding);
+    } else {
+      unverifiableFindings.push({
+        ...finding,
+        verificationStatus: 'unverifiable',
+        verificationNote: `Cannot verify: invalid URL "${url ?? 'missing'}"`,
+      });
     }
   }
 
-  return { verifiedFindings: verified, verifiedCount: verified.length };
+  // Visit pages for verifiable findings and collect page data
+  const verificationData: Array<{
+    findingId: string;
+    url: string;
+    pageData: Record<string, unknown>;
+  }> = [];
+
+  for (const finding of verifiableFindings) {
+    const url = finding.url || finding.evidence?.url || finding.location?.url;
+    try {
+      const pageData = await browser.visitPage(url);
+      verificationData.push({
+        findingId: finding.id,
+        url,
+        pageData: {
+          title: pageData.title,
+          statusCode: pageData.statusCode,
+          loadTimeMs: pageData.loadTimeMs,
+          consoleErrors: pageData.consoleMessages.filter(
+            (m: any) => m.type === 'error',
+          ),
+          networkErrors: pageData.networkErrors,
+          textSnippet: pageData.text.substring(0, 2000),
+        },
+      });
+    } catch (error) {
+      unverifiableFindings.push({
+        ...finding,
+        verificationStatus: 'unverifiable',
+        verificationNote: `Verification failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      // Remove from verifiable list since it failed
+      const idx = verifiableFindings.indexOf(finding);
+      if (idx !== -1) verifiableFindings.splice(idx, 1);
+    }
+  }
+
+  return {
+    verifiableFindings,
+    unverifiableFindings,
+    verificationData,
+    existingFindings: findings,
+  };
 }

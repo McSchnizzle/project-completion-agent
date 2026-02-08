@@ -14,7 +14,9 @@ import {
   getReportPath,
   getPrdSummaryPath,
   getProgressPath,
+  getConfigPath,
 } from '../artifact-paths';
+import type { FeatureCoverage } from '../feature-mapper.js';
 
 /**
  * Severity levels used for findings
@@ -118,11 +120,23 @@ export function generateReport(auditDir: string): string {
   // Read page inventories
   const pages = loadPages(auditDir);
 
+  // Load auth config for methodology section
+  const configPath = getConfigPath(auditDir);
+  let authStrategy = 'none';
+  if (fs.existsSync(configPath)) {
+    try {
+      const configContent = fs.readFileSync(configPath, 'utf-8');
+      const authMatch = configContent.match(/auth_strategy:\s*(\S+)/);
+      if (authMatch) authStrategy = authMatch[1];
+    } catch { /* ignore */ }
+  }
+
   // Generate report sections
-  const header = generateHeader(progress);
-  const executiveSummary = generateExecutiveSummary(findings, progress, prdSummary);
-  const findingsTable = generateFindingsTable(findings);
-  const coverageMetrics = generateCoverageMetrics(progress, prdSummary, pages);
+  const header = generateHeader(progress, pages);
+  const methodology = generateMethodology(pages.length, authStrategy, progress);
+  const executiveSummary = generateExecutiveSummary(findings, progress, prdSummary, auditDir);
+  const { findingsSection, informationalSection } = generateFindingsTable(findings);
+  const coverageMetrics = generateCoverageMetrics(progress, prdSummary, pages, auditDir);
   const pagesExplored = generatePagesExplored(pages);
   const formTestResults = generateFormTestResults(findings);
   const recommendations = generateRecommendations(findings);
@@ -130,8 +144,10 @@ export function generateReport(auditDir: string): string {
   // Assemble full report
   const report = [
     header,
+    methodology,
     executiveSummary,
-    findingsTable,
+    findingsSection,
+    informationalSection,
     coverageMetrics,
     pagesExplored,
     formTestResults,
@@ -217,13 +233,44 @@ function loadPages(auditDir: string): PageInventory[] {
 /**
  * Generate report header
  */
-function generateHeader(progress: Progress): string {
+function generateHeader(progress: Progress, pages: PageInventory[]): string {
+  let targetUrl = progress.target_url;
+  if (!targetUrl || targetUrl === 'undefined' || targetUrl === 'unknown') {
+    try {
+      if (pages.length > 0) {
+        targetUrl = new URL(pages[0].url).origin;
+      } else {
+        targetUrl = 'unknown';
+      }
+    } catch {
+      targetUrl = pages.length > 0 ? pages[0].url : 'unknown';
+    }
+  }
+
   return `# Audit Report
 
 **Audit ID:** ${progress.audit_id}
-**Target URL:** ${progress.target_url}
+**Target URL:** ${targetUrl}
 **Started:** ${new Date(progress.started_at).toLocaleString()}
 **Completed:** ${progress.completed_at ? new Date(progress.completed_at).toLocaleString() : 'In Progress'}`;
+}
+
+/**
+ * Generate methodology section
+ */
+function generateMethodology(pageCount: number, authStrategy: string, progress: Progress): string {
+  const phasesCompleted = progress.completed_at ? '14/14' : 'in progress';
+
+  return `## Methodology
+
+This audit was performed by the Project Completion Agent using:
+- **Browser**: Playwright (headless Chromium)
+- **Pages Visited**: ${pageCount}
+- **Authentication**: ${authStrategy}
+- **LLM Analysis**: Claude API (Anthropic)
+- **Phases Completed**: ${phasesCompleted}
+
+The agent visited each page, collected DOM structure, forms, links, and console output, then analyzed the data against the PRD acceptance criteria using Claude.`;
 }
 
 /**
@@ -232,7 +279,8 @@ function generateHeader(progress: Progress): string {
 function generateExecutiveSummary(
   findings: Finding[],
   progress: Progress,
-  prdSummary: PrdSummary | null
+  prdSummary: PrdSummary | null,
+  auditDir: string
 ): string {
   const severityCounts = {
     P0: 0,
@@ -242,12 +290,14 @@ function generateExecutiveSummary(
     P4: 0,
   };
 
+  // Only count P0-P3 as real findings for the summary count
   for (const finding of findings) {
     if (finding.severity in severityCounts) {
       severityCounts[finding.severity]++;
     }
   }
 
+  const realFindingsCount = severityCounts.P0 + severityCounts.P1 + severityCounts.P2 + severityCounts.P3;
   const criticalCount = severityCounts.P0 + severityCounts.P1;
   const coverage = progress.coverage;
   const featureCount = prdSummary?.summary.total_features ?? 0;
@@ -255,9 +305,15 @@ function generateExecutiveSummary(
   // Use page count from progress OR count pages directly
   const pageCount = coverage?.pages_visited || 0;
 
+  let completionScore = '';
+  const featureCoverage = loadFeatureCoverageData(auditDir);
+  if (featureCoverage && featureCoverage.length > 0) {
+    completionScore = generateCompletionScore(featureCoverage);
+  }
+
   return `## Executive Summary
 
-This audit discovered **${findings.length} findings** across ${pageCount} pages${
+This audit discovered **${realFindingsCount} findings** (plus ${severityCounts.P4} informational notes) across ${pageCount} pages${
     featureCount > 0 ? ` covering ${featureCount} features` : ''
   }.
 
@@ -269,42 +325,141 @@ This audit discovered **${findings.length} findings** across ${pageCount} pages$
 - **Low (P3):** ${severityCounts.P3}
 - **Info (P4):** ${severityCounts.P4}
 
-${criticalCount > 0 ? `⚠️ **${criticalCount} critical/high priority findings require immediate attention.**` : '✅ No critical or high priority findings detected.'}`;
+${criticalCount > 0 ? `**${criticalCount} critical/high priority findings require immediate attention.**` : 'No critical or high priority findings detected.'}
+${completionScore}`;
 }
 
 /**
- * Generate findings table
+ * Load feature coverage data from feature-coverage.json
  */
-function generateFindingsTable(findings: Finding[]): string {
-  if (findings.length === 0) {
-    return `## Findings
+function loadFeatureCoverageData(auditDir: string): FeatureCoverage[] | null {
+  const featureCoveragePath = path.join(auditDir, 'feature-coverage.json');
+  if (!fs.existsSync(featureCoveragePath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(featureCoveragePath, 'utf-8')) as FeatureCoverage[];
+  } catch {
+    return null;
+  }
+}
 
-No findings were discovered during this audit.`;
+/**
+ * Generate completion score from feature coverage data
+ */
+function generateCompletionScore(featureCoverage: FeatureCoverage[]): string {
+  const byPriority: Record<string, { total: number; passing: number }> = {};
+
+  for (const fc of featureCoverage) {
+    const p = fc.priority.toLowerCase();
+    if (!byPriority[p]) {
+      byPriority[p] = { total: 0, passing: 0 };
+    }
+    byPriority[p].total++;
+    if (fc.status === 'pass') {
+      byPriority[p].passing++;
+    }
   }
 
-  const rows = findings
-    .sort((a, b) => {
-      // Sort by severity first (P0 > P1 > P2 > P3 > P4)
-      const severityOrder = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 };
+  const mustHave = byPriority['must-have'] || byPriority['p0'] || { total: 0, passing: 0 };
+  const shouldHave = byPriority['should-have'] || byPriority['p1'] || { total: 0, passing: 0 };
+  const couldHave = byPriority['could-have'] || byPriority['p2'] || { total: 0, passing: 0 };
+
+  const pct = mustHave.total > 0 ? Math.round((mustHave.passing / mustHave.total) * 100) : 0;
+
+  const lines: string[] = [
+    '',
+    '### Completion Score',
+    '',
+    `**${mustHave.passing}/${mustHave.total} must-have features passing (${pct}%)**`,
+    '',
+  ];
+
+  if (mustHave.total > 0) lines.push(`- Must-have: ${mustHave.passing}/${mustHave.total} passing`);
+  if (shouldHave.total > 0) lines.push(`- Should-have: ${shouldHave.passing}/${shouldHave.total} passing`);
+  if (couldHave.total > 0) lines.push(`- Could-have: ${couldHave.passing}/${couldHave.total} passing`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Generate findings table, separating P4 informational items
+ */
+function generateFindingsTable(findings: Finding[]): { findingsSection: string; informationalSection: string } {
+  const realFindings = findings.filter((f) => f.severity !== 'P4');
+  const informational = findings.filter((f) => f.severity === 'P4');
+
+  const sortFindings = (list: Finding[]) =>
+    list.sort((a, b) => {
+      const severityOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 };
       const aSev = severityOrder[a.severity] ?? 99;
       const bSev = severityOrder[b.severity] ?? 99;
       if (aSev !== bSev) return aSev - bSev;
-      // Then by ID
       return a.id.localeCompare(b.id);
-    })
-    .map((f) => {
-      const category = f.category || f.type || 'general';
-      const status = f.status || 'open';
-      const issueLink = f.issue_number ? ` [#${f.issue_number}]` : '';
-      return `| ${f.severity} | ${f.id}${issueLink} | ${f.title} | ${category} | ${status} |`;
-    })
-    .join('\n');
+    });
 
-  return `## Findings
+  const formatRow = (f: Finding) => {
+    const category = f.category || f.type || 'general';
+    const status = f.status || 'open';
+    const issueLink = f.issue_number ? ` [#${f.issue_number}]` : '';
+    return `| ${f.severity} | ${f.id}${issueLink} | ${f.title} | ${category} | ${status} |`;
+  };
+
+  let findingsSection: string;
+  if (realFindings.length === 0 && informational.length === 0) {
+    findingsSection = `## Findings\n\nNo findings were discovered during this audit.`;
+  } else if (realFindings.length === 0) {
+    findingsSection = `## Findings\n\nNo defects were discovered during this audit.`;
+  } else {
+    const rows = sortFindings(realFindings).map(formatRow).join('\n');
+    findingsSection = `## Findings
 
 | Severity | ID | Title | Category | Status |
 |----------|-----|-------|----------|--------|
 ${rows}`;
+  }
+
+  let informationalSection = '';
+  if (informational.length > 0) {
+    const rows = sortFindings(informational).map(formatRow).join('\n');
+    informationalSection = `## Informational Notes
+
+The following items are observations and suggestions, not actionable defects.
+
+| Severity | ID | Title | Category | Status |
+|----------|-----|-------|----------|--------|
+${rows}`;
+  }
+
+  return { findingsSection, informationalSection };
+}
+
+/**
+ * Map coverage status to display icon
+ */
+function coverageStatusIcon(status: FeatureCoverage['status']): string {
+  switch (status) {
+    case 'pass': return 'PASS';
+    case 'fail': return 'FAIL';
+    case 'partial': return 'PARTIAL';
+    case 'not_testable': return 'N/T';
+    case 'not_checked':
+    default: return '--';
+  }
+}
+
+/**
+ * Map coverage status to display text
+ */
+function coverageStatusText(status: FeatureCoverage['status']): string {
+  switch (status) {
+    case 'pass': return 'Pass';
+    case 'fail': return 'Failed';
+    case 'partial': return 'Partial';
+    case 'not_testable': return 'Not Testable';
+    case 'not_checked':
+    default: return 'Not Checked';
+  }
 }
 
 /**
@@ -313,7 +468,8 @@ ${rows}`;
 function generateCoverageMetrics(
   progress: Progress,
   prdSummary: PrdSummary | null,
-  pages: PageInventory[]
+  pages: PageInventory[],
+  auditDir: string
 ): string {
   if (!prdSummary) {
     return `## Coverage Metrics
@@ -324,20 +480,51 @@ No PRD was provided for this audit.
 - **Forms Tested:** ${progress.coverage?.forms_tested ?? 0}`;
   }
 
-  // Count features by status
-  const featureStatus = new Map<string, number>();
-  for (const page of pages) {
-    if (page.features_checked) {
-      for (const [, check] of Object.entries(page.features_checked)) {
-        const status = check.status;
-        featureStatus.set(status, (featureStatus.get(status) || 0) + 1);
-      }
-    }
+  // Try to load feature coverage from feature-coverage.json
+  const featureCoverage = loadFeatureCoverageData(auditDir);
+
+  let featureRows: string;
+
+  if (featureCoverage && featureCoverage.length > 0) {
+    // Use feature-coverage.json data (preferred)
+    featureRows = featureCoverage
+      .map((fc) => {
+        const statusIcon = coverageStatusIcon(fc.status);
+        const statusText = coverageStatusText(fc.status);
+        const checked = fc.checkedCriteria?.length ?? 0;
+        const total = fc.checkedCriteria
+          ? fc.checkedCriteria.length
+          : 0;
+        const evidenceSummary = fc.checkedCriteria && fc.checkedCriteria.length > 0
+          ? fc.checkedCriteria
+              .slice(0, 2)
+              .map((c) => c.evidence)
+              .filter(Boolean)
+              .join('; ')
+              .slice(0, 80)
+          : '-';
+        return `| ${statusIcon} | ${fc.featureId} | ${fc.featureName} | ${fc.priority} | ${statusText} | ${checked}/${total} | ${evidenceSummary} |`;
+      })
+      .join('\n');
+
+    return `## Coverage Metrics
+
+### Feature Coverage
+
+| Status | ID | Feature | Priority | Result | Criteria | Evidence |
+|--------|-----|---------|----------|--------|----------|----------|
+${featureRows}
+
+**Summary:**
+- **Total Features:** ${prdSummary.summary.total_features}
+- **Pages Visited:** ${progress.coverage?.pages_visited ?? 0}
+- **Forms Tested:** ${progress.coverage?.forms_tested ?? 0}
+- **Features Checked:** ${featureCoverage.filter((fc) => fc.status !== 'not_checked').length}`;
   }
 
-  const featureRows = prdSummary.features
+  // Fallback: use old page.features_checked logic
+  featureRows = prdSummary.features
     .map((f) => {
-      // Count how many times this feature was checked
       let passCount = 0;
       let failCount = 0;
       let partialCount = 0;
@@ -358,14 +545,14 @@ No PRD was provided for this audit.
 
       const statusIcon =
         failCount > 0
-          ? '❌'
+          ? 'FAIL'
           : partialCount > 0
-          ? '⚠️'
+          ? 'PARTIAL'
           : passCount > 0
-          ? '✅'
+          ? 'PASS'
           : notTestedCount > 0
-          ? '❓'
-          : '⏭️';
+          ? 'N/T'
+          : '--';
       const statusText =
         failCount > 0
           ? 'Failed'

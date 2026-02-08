@@ -23,6 +23,10 @@ export interface PrdFeature {
   priority: 'must' | 'should' | 'could';
   acceptance_criteria: string[];
   status: 'not_tested' | 'tested' | 'passed' | 'failed';
+  /** URL route hints extracted from acceptance criteria (e.g., "/settings", "/dashboard"). */
+  routeHints: string[];
+  /** Keywords extracted from name and description for page matching. */
+  keywords: string[];
 }
 
 export interface PrdFlow {
@@ -177,13 +181,21 @@ function extractFeatures(sections: MdSection[]): PrdFeature[] {
     const priority = inferPriority(section.content);
     const criteria = extractAcceptanceCriteria(section.content, bullets);
 
+    const name = cleanHeading(section.heading);
+    const description = buildDescription(section.content);
+    const acceptanceCriteria = criteria.length > 0 ? criteria : bullets.slice(0, 5);
+
     features.push({
       id: `F${featureCounter}`,
-      name: cleanHeading(section.heading),
-      description: buildDescription(section.content),
+      name,
+      description,
       priority,
-      acceptance_criteria: criteria.length > 0 ? criteria : bullets.slice(0, 5),
+      acceptance_criteria: acceptanceCriteria,
       status: 'not_tested',
+      routeHints: extractRouteHintsFromText(
+        [description, ...acceptanceCriteria].join('\n'),
+      ),
+      keywords: extractKeywordsFromText(`${name} ${description}`),
     });
   }
 
@@ -358,6 +370,50 @@ function buildDescription(content: string): string {
   }
 
   return descParts.join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Route hint & keyword extraction (for feature-to-page mapping)
+// ---------------------------------------------------------------------------
+
+/** Stop words excluded from keyword extraction. */
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+  'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'shall', 'can', 'must', 'need', 'not', 'no',
+  'all', 'each', 'every', 'any', 'some', 'this', 'that', 'these', 'those',
+  'it', 'its', 'as', 'if', 'when', 'then', 'than', 'so', 'up', 'out',
+  'about', 'into', 'over', 'after', 'before', 'between', 'under', 'above',
+  'user', 'users', 'able', 'also', 'feature', 'page', 'view',
+]);
+
+/**
+ * Extract URL route hints from text (e.g., "/settings", "/dashboard").
+ */
+function extractRouteHintsFromText(text: string): string[] {
+  const routes: string[] = [];
+  const routeRegex = /(?:^|\s|["'`(])(\/[a-z][a-z0-9-/]*)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = routeRegex.exec(text)) !== null) {
+    const route = match[1].toLowerCase();
+    if (!route.startsWith('/n') || route.length > 3) {
+      routes.push(route);
+    }
+  }
+  return [...new Set(routes)];
+}
+
+/**
+ * Extract meaningful keywords from text for page matching.
+ */
+function extractKeywordsFromText(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+  return [...new Set(words)];
 }
 
 // ---------------------------------------------------------------------------

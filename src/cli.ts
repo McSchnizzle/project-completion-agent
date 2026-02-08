@@ -15,7 +15,7 @@ import { buildConfig, AuditConfig } from './config.js';
 import { runAudit, runVerify, type AuditResult, type VerifyResult } from './orchestrator.js';
 
 /** Version extracted from package.json */
-const VERSION = '0.75.3';
+const VERSION = '0.75.4';
 
 /** Parsed CLI arguments ready to pass to buildConfig */
 export type CliArgs = Partial<AuditConfig> & {

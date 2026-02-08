@@ -15,6 +15,8 @@ import { type PhaseName, type PhaseType, getPhaseConfig } from './phase-registry
 import { type LLMClient, type LLMResponse } from './llm/anthropic-client.js';
 import { loadPrompt, interpolateVariables } from './llm/prompt-loader.js';
 import { getFindingDir } from './artifact-paths.js';
+import { filterFindings } from './finding-quality-pipeline.js';
+import { mapFeaturesToPages, saveFeatureCoverage, type MappablePage, type FeatureCoverage } from './feature-mapper.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -277,17 +279,34 @@ async function dispatchBrowserClaude(
 
   // Step 2: Load PRD features context if available
   let prdContext = '';
+  let prdFeatures: any[] = [];
   const prdSummaryPath = path.join(context.auditDir, 'prd-summary.json');
   if (fs.existsSync(prdSummaryPath)) {
     try {
       const prdData = JSON.parse(fs.readFileSync(prdSummaryPath, 'utf-8'));
       const features = prdData.features || prdData;
       if (Array.isArray(features)) {
+        prdFeatures = features;
         prdContext = features.map((f: any) =>
           `- ${f.id || ''}: ${f.name || f.title || ''} [${f.priority || 'must'}] ${f.acceptance_criteria ? '| AC: ' + (Array.isArray(f.acceptance_criteria) ? f.acceptance_criteria.join('; ') : f.acceptance_criteria) : ''}`
         ).join('\n');
       }
     } catch { /* skip */ }
+  }
+
+  // Build visited pages list from browser data (needed for URL requirements and filters)
+  const visitedPages: string[] = [];
+  if (browserData) {
+    const pages = browserData.pages ?? browserData.visitedPages ?? browserData.urls;
+    if (Array.isArray(pages)) {
+      for (const p of pages) {
+        if (typeof p === 'string') visitedPages.push(p);
+        else if (p && typeof (p as Record<string, unknown>).url === 'string') visitedPages.push((p as Record<string, unknown>).url as string);
+      }
+    }
+  }
+  if (context.url && !visitedPages.includes(context.url)) {
+    visitedPages.push(context.url);
   }
 
   // Step 3: Build analysis prompt with collected data injected
@@ -304,6 +323,82 @@ async function dispatchBrowserClaude(
   const prdSection = prdContext
     ? `\n\n## PRD FEATURES TO CHECK\n\n${prdContext}`
     : '';
+
+  // Quality instructions appended to ALL browser-claude phases
+  const qualityInstructions = `\n\n## QUALITY REQUIREMENTS
+
+- Only report actual defects, bugs, missing features, or deviations from the PRD
+- Do NOT report positive observations as findings (e.g., "good performance" is not a finding)
+- Do NOT report tool/audit limitations as findings (e.g., "no accessibility testing performed")
+- Do NOT report vague observations without specific PRD criteria references
+- Every finding must have concrete evidence from the collected page data`;
+
+  // URL requirements appended to ALL browser-claude phases
+  const urlRequirements = `\n\n## URL REQUIREMENTS
+
+IMPORTANT: Every finding MUST include a specific page URL from the visited pages list.
+Do NOT use "N/A" as a URL. If you cannot identify a specific URL, use the closest matching page from the visited list.
+Available page URLs:
+${visitedPages.map((u) => `- ${u}`).join('\n')}`;
+
+  // --- Verification-only mode ---
+  if (phaseName === 'verification') {
+    return dispatchVerificationPhase(
+      phaseName, llmClient, enrichedContext, interpolated,
+      dataSection, qualityInstructions, urlRequirements,
+      visitedPages, start,
+    );
+  }
+
+  // --- Exploration: feature checking ---
+  let featureVerificationSection = '';
+  if (phaseName === 'exploration' && prdFeatures.length > 0) {
+    // Build MappablePage list from browser data for feature mapping
+    const mappablePages: MappablePage[] = [];
+    if (browserData) {
+      const pages = browserData.pages ?? browserData.visitedPages;
+      if (Array.isArray(pages)) {
+        for (const p of pages) {
+          if (p && typeof p === 'object') {
+            const pg = p as Record<string, unknown>;
+            mappablePages.push({
+              url: (pg.url as string) || '',
+              title: (pg.title as string) || '',
+              text: (pg.text as string) || '',
+            });
+          }
+        }
+      }
+    }
+
+    // Generate feature-to-page mappings
+    const featureMappings = mapFeaturesToPages(prdFeatures, mappablePages);
+
+    const featureList = prdFeatures.map((f: any) => {
+      const mapping = featureMappings.find((m) => m.featureId === f.id);
+      const mappedPageUrls = mapping?.mappedPages?.map((mp) => mp.url).join(', ') || 'none';
+      const ac = Array.isArray(f.acceptance_criteria) ? f.acceptance_criteria.join('; ') : (f.acceptance_criteria || '');
+      return `- ${f.id}: ${f.name || f.title || ''} [${f.priority || 'must'}]\n  Acceptance criteria: ${ac}\n  Mapped pages: ${mappedPageUrls}`;
+    }).join('\n');
+
+    featureVerificationSection = `\n\n## PRD Feature Verification
+
+For each feature below, check whether the visited pages satisfy its acceptance criteria.
+Report your feature coverage assessment in the JSON response under a "featureCoverage" key.
+
+Features to verify:
+${featureList}
+
+For each feature, report:
+{
+  "featureId": "F1",
+  "status": "pass" | "fail" | "partial" | "not_testable",
+  "evidence": "specific evidence from page data",
+  "checkedCriteria": [
+    {"criterion": "...", "status": "pass"|"fail"|"not_testable", "evidence": "..."}
+  ]
+}`;
+  }
 
   const outputInstruction = `\n\n## REQUIRED OUTPUT FORMAT
 
@@ -328,7 +423,7 @@ Return a JSON object with this structure:
       "evidence": "Specific data from the collected browser data that supports this finding"
     }
   ],
-  "summary": "Brief summary of analysis"
+  ${phaseName === 'exploration' && prdFeatures.length > 0 ? '"featureCoverage": [...],\n  ' : ''}"summary": "Brief summary of analysis"
 }
 \`\`\`
 
@@ -342,7 +437,7 @@ Severity guide:
 Be specific and evidence-based. Only report findings you can support with the collected data.
 If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
 
-  const prompt = interpolated + dataSection + prdSection + outputInstruction;
+  const prompt = interpolated + dataSection + prdSection + qualityInstructions + urlRequirements + featureVerificationSection + outputInstruction;
 
   const response = await llmClient.complete(prompt, {
     maxTokens: 8192,
@@ -351,14 +446,47 @@ If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
 
   recordCost(enrichedContext, response);
 
-  // Step 4: Extract findings from LLM response and save to findings directory
+  // Step 4: Extract feature coverage from response (exploration phase only)
+  if (phaseName === 'exploration' && prdFeatures.length > 0) {
+    try {
+      const jsonMatch = response.content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      const jsonStr = jsonMatch ? jsonMatch[1] : response.content;
+      const parsed = JSON.parse(jsonStr.trim());
+      if (parsed.featureCoverage && Array.isArray(parsed.featureCoverage)) {
+        const coverage: FeatureCoverage[] = parsed.featureCoverage.map((fc: any) => ({
+          featureId: fc.featureId || '',
+          featureName: prdFeatures.find((f: any) => f.id === fc.featureId)?.name || '',
+          priority: prdFeatures.find((f: any) => f.id === fc.featureId)?.priority || 'must',
+          status: fc.status || 'not_checked',
+          checkedCriteria: Array.isArray(fc.checkedCriteria) ? fc.checkedCriteria : [],
+        }));
+        saveFeatureCoverage(context.auditDir, coverage);
+        console.log(`[Dispatcher] exploration: saved feature coverage for ${coverage.length} features`);
+      }
+    } catch {
+      console.warn('[Dispatcher] exploration: could not extract featureCoverage from LLM response');
+    }
+  }
+
+  // Step 5: Extract findings from LLM response and filter through quality gates
   const extractedFindings = extractFindings(response.content);
   if (extractedFindings.length > 0) {
+    // Run quality gate filters
+    const filterResult = filterFindings(extractedFindings, visitedPages);
+
+    if (filterResult.rejected.length > 0) {
+      console.log(`[Dispatcher] ${phaseName}: rejected ${filterResult.rejected.length} non-findings:`);
+      for (const r of filterResult.rejected) {
+        console.log(`  - ${(r.finding.id || 'unknown')}: [${r.filter}] ${r.reason}`);
+      }
+    }
+
+    // Save only accepted findings to disk
     const findingDir = getFindingDir(context.auditDir);
     fs.mkdirSync(findingDir, { recursive: true });
 
-    for (const finding of extractedFindings) {
-      const findingId = finding.id || `F-${String(extractedFindings.indexOf(finding) + 1).padStart(3, '0')}`;
+    for (const finding of filterResult.accepted) {
+      const findingId = (finding.id as string) || `F-${String(filterResult.accepted.indexOf(finding) + 1).padStart(3, '0')}`;
       finding.id = findingId;
       finding.phase = phaseName;
       finding.discovered_at = new Date().toISOString();
@@ -367,7 +495,109 @@ If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
       fs.writeFileSync(findingPath, JSON.stringify(finding, null, 2), 'utf-8');
     }
 
-    console.log(`[Dispatcher] ${phaseName}: extracted ${extractedFindings.length} findings`);
+    console.log(`[Dispatcher] ${phaseName}: accepted ${filterResult.accepted.length}/${extractedFindings.length} findings`);
+  }
+
+  return {
+    success: true,
+    output: response.content,
+    phaseType: 'browser-claude',
+    durationMs: Date.now() - start,
+  };
+}
+
+/**
+ * Handle the verification phase in verification-only mode.
+ * Loads existing findings and asks the LLM to verify them, not create new ones.
+ * Updates existing finding files with verification status.
+ */
+async function dispatchVerificationPhase(
+  phaseName: PhaseName,
+  llmClient: LLMClient,
+  context: DispatchContext & { browserData?: Record<string, unknown> },
+  interpolated: string,
+  dataSection: string,
+  qualityInstructions: string,
+  urlRequirements: string,
+  visitedPages: string[],
+  start: number,
+): Promise<PhaseDispatchResult> {
+  // Load existing findings
+  const findingDir = getFindingDir(context.auditDir);
+  const existingFindings: Record<string, unknown>[] = [];
+  if (fs.existsSync(findingDir)) {
+    const files = fs.readdirSync(findingDir).filter((f) => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(findingDir, file), 'utf-8'));
+        existingFindings.push(data);
+      } catch { /* skip unparseable */ }
+    }
+  }
+
+  const findingsList = existingFindings.map((f: any) =>
+    `- ${f.id}: "${f.title}" [${f.severity}] at ${f.url || 'N/A'}\n  Description: ${(f.description || '').substring(0, 200)}`
+  ).join('\n');
+
+  const verificationPrompt = `${interpolated}${dataSection}${qualityInstructions}${urlRequirements}
+
+## Verification Mode
+
+You are ONLY verifying existing findings. Do NOT create new findings.
+For each finding below, check whether it can be reproduced with the current page data.
+
+Existing findings to verify:
+${findingsList || '(no existing findings)'}
+
+For each finding, report:
+\`\`\`json
+{
+  "verifications": [
+    {
+      "findingId": "F-001",
+      "verificationStatus": "verified" | "flaky" | "false_positive",
+      "evidence": "what you observed"
+    }
+  ],
+  "summary": "Brief summary of verification results"
+}
+\`\`\`
+
+IMPORTANT: Do NOT add new findings. Only verify the ones listed above.`;
+
+  const response = await llmClient.complete(verificationPrompt, {
+    maxTokens: 8192,
+    temperature: 0,
+  });
+
+  recordCost(context, response);
+
+  // Parse verification results and update existing finding files
+  try {
+    const jsonMatch = response.content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    const jsonStr = jsonMatch ? jsonMatch[1] : response.content;
+    const parsed = JSON.parse(jsonStr.trim());
+    const verifications = parsed.verifications || parsed.findings || [];
+
+    if (Array.isArray(verifications) && fs.existsSync(findingDir)) {
+      for (const v of verifications) {
+        const findingId = v.findingId || v.id;
+        if (!findingId) continue;
+        const findingPath = path.join(findingDir, `${findingId}.json`);
+        if (fs.existsSync(findingPath)) {
+          try {
+            const findingData = JSON.parse(fs.readFileSync(findingPath, 'utf-8'));
+            findingData.verificationStatus = v.verificationStatus || v.status || 'unverified';
+            findingData.verificationEvidence = v.evidence || '';
+            findingData.verified_at = new Date().toISOString();
+            fs.writeFileSync(findingPath, JSON.stringify(findingData, null, 2), 'utf-8');
+          } catch { /* skip */ }
+        }
+      }
+      console.log(`[Dispatcher] verification: updated ${verifications.length} existing findings`);
+    }
+  } catch {
+    console.warn('[Dispatcher] verification: could not parse verification results from LLM response');
   }
 
   return {

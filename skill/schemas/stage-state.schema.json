@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/stage-state.json",
+  "title": "Stage State",
+  "description": "State tracking for modular audit stages",
+  "type": "object",
+  "required": ["schema_version", "audit_id", "current_stage", "completed_stages", "status"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "audit_id": {
+      "type": "string"
+    },
+    "current_stage": {
+      "type": ["string", "null"],
+      "enum": [
+        "complete-preflight",
+        "complete-code-scan",
+        "complete-explore",
+        "complete-test",
+        "complete-responsive",
+        "complete-aggregate",
+        "complete-verify",
+        "complete-compare",
+        "complete-report",
+        null
+      ]
+    },
+    "completed_stages": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "paused", "stopped", "complete", "failed"]
+    },
+    "stage_outputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "enum": ["complete", "partial", "failed"]},
+          "paths": {"type": "array", "items": {"type": "string"}},
+          "metrics": {"type": "object"}
+        }
+      }
+    },
+    "resume_point": {
+      "type": ["object", "null"],
+      "properties": {
+        "stage": {"type": "string"},
+        "progress": {"type": "object"},
+        "last_url": {"type": "string"},
+        "queue_position": {"type": "integer"}
+      }
+    },
+    "session_state": {
+      "type": ["object", "null"],
+      "properties": {
+        "cookies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "value": {"type": "string"},
+              "path": {"type": "string"},
+              "httpOnly": {"type": "boolean"}
+            }
+          }
+        },
+        "localStorage": {"type": "object"},
+        "sessionStorage": {"type": "object"},
+        "captured_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {"type": "string"},
+          "error": {"type": "string"},
+          "timestamp": {"type": "string", "format": "date-time"},
+          "recoverable": {"type": "boolean"}
+        }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

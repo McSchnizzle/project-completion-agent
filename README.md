@@ -1,6 +1,6 @@
 # Project Completion Agent
 
-A Claude Code skill that bridges the gap between "code complete" (~75% done) and "actually complete" (ready for real users).
+A Claude Code skill and TypeScript orchestrator that bridges the gap between "code complete" (~75% done) and "actually complete" (ready for real users).
 
 ## What It Does
 
@@ -12,9 +12,35 @@ The Project Completion Agent automates the tedious final stretch of software pro
 4. **Creating GitHub issues** that can be fixed via existing workflows
 5. **Verifying fixes** with regression testing
 
+## Architecture
+
+The agent runs as a **14-phase pipeline** orchestrated by TypeScript:
+
+```
+Preflight → PRD Parsing → Code Analysis → Progress Init → Safety
+    → Exploration → Form Testing → Responsive Testing
+    → Finding Quality → Report → Interactive Review
+    → Verification → Completion Checklist → Polish
+```
+
+Each phase is either **pure TypeScript** (preflight, safety, progress, report) or **Claude-powered** (exploration, form testing, verification) via the Claude Agent SDK.
+
+### Key Components
+
+| Module | Purpose |
+|--------|---------|
+| `src/orchestrator.ts` | Pipeline execution engine |
+| `src/phase-runner.ts` | Per-phase execution with retry, validation, budget |
+| `src/sdk-bridge.ts` | Bridge to Claude Agent SDK with cost tracking |
+| `src/job-runner.ts` | Parallel job execution with concurrency control |
+| `src/browser-queue.ts` | Exclusive-lease queue for serialized browser access |
+| `src/artifact-store.ts` | JSONL append-only artifact store with atomic writes |
+| `src/cost-tracker.ts` | Per-phase cost/token/duration accounting |
+| `src/route-discovery.ts` | Multi-source route discovery (code + sitemap + crawl) |
+
 ## Installation
 
-Clone the repo and copy the skill to your Claude Code skills directory:
+### As a Claude Code Skill (Interactive)
 
 ```bash
 git clone https://github.com/McSchnizzle/project-completion-agent.git
@@ -22,34 +48,59 @@ mkdir -p ~/.claude/skills/complete-audit
 cp -r project-completion-agent/skill/* ~/.claude/skills/complete-audit/
 ```
 
-Restart Claude Code to load the skill.
+### As a CLI Tool (Programmatic)
+
+```bash
+git clone https://github.com/McSchnizzle/project-completion-agent.git
+cd project-completion-agent
+npm install
+npm run build
+```
 
 ## Usage
 
-### Run an Audit
+### Claude Code Skill
 
 ```
 /complete-audit
 ```
 
-The agent will:
-- Detect your framework and extract routes from code
-- Open your app in Chrome (via Claude for Chrome)
-- Explore pages, capture screenshots, inventory elements
-- Compare discovered routes with code analysis
-- Report coverage metrics and any findings
+### CLI
 
-### Focused Audit
+```bash
+# Full audit
+npx tsx src/cli.ts audit --url http://localhost:3000
 
-```
-/complete-audit --focus "auth, payments"
+# With options
+npx tsx src/cli.ts audit \
+  --url http://localhost:3000 \
+  --codebase-path ./my-app \
+  --max-pages 20 \
+  --parallel \
+  --focus "/admin/*,/api/*"
+
+# Verify a fix
+npx tsx src/cli.ts verify --issue 42
+
+# CI mode (non-interactive)
+CI=1 npx tsx src/cli.ts audit --url http://localhost:3000
 ```
 
-### Verify a Fix
+### Options
 
-```
-/complete-verify gh issue #42
-```
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--url` | Target application URL | Required |
+| `--codebase-path` | Path to source code | `.` |
+| `--prd` | Path to PRD document | Auto-detect |
+| `--max-pages` | Maximum pages to explore | `50` |
+| `--max-forms` | Maximum forms to test | `20` |
+| `--parallel` | Enable parallel exploration | `false` |
+| `--focus` | Glob patterns to focus on | All routes |
+| `--browser` | Browser provider (`chrome`/`playwright`/`none`) | `chrome` |
+| `--safe-mode` | Force safe mode (no destructive actions) | Auto-detect |
+| `--budget` | Maximum spend in USD | `5.00` |
+| `--resume` | Resume from last checkpoint | `false` |
 
 ## Configuration
 
@@ -58,8 +109,8 @@ Create `.complete-agent/config.yml` in your project root:
 ```yaml
 environment:
   url: "https://staging.example.com"
-  is_production_data: false   # If true, safe_mode is forced ON
-  safe_mode: false            # Skip destructive actions (delete, refund)
+  is_production_data: false
+  safe_mode: false
 
 credentials:
   admin:
@@ -69,7 +120,6 @@ credentials:
 exploration:
   max_pages: 20
   same_origin_only: true
-  realtime_wait_seconds: 5
 
 github:
   create_issues: true
@@ -78,119 +128,67 @@ github:
 
 ## Requirements
 
+- Node.js 18+
 - [Claude Code](https://claude.ai/claude-code) CLI
-- [Claude for Chrome](https://chrome.google.com/webstore/detail/claude-for-chrome) extension (for browser automation)
+- [Claude for Chrome](https://chrome.google.com/webstore/detail/claude-for-chrome) extension (or Playwright for headless)
 - GitHub CLI (`gh`) authenticated (for issue creation)
 
 ## Output
 
-Audit results are saved to `.complete-agent/audits/{timestamp}/`:
+Audit results are saved to `.complete-agent/audits/{audit-id}/`:
 
 ```
-.complete-agent/
-├── config.yml
-├── audits/
-│   ├── 2026-02-03T16-46-31/
-│   │   ├── progress.md          # Audit progress and status
-│   │   ├── coverage-summary.md  # Coverage report
-│   │   ├── code-analysis.json   # Routes from code
-│   │   ├── screenshots/         # Page screenshots
-│   │   ├── findings/            # Issue details
-│   │   └── pages/               # Page inventories
-│   └── current -> 2026-02-03T16-46-31
-└── issues/
+.complete-agent/audits/audit-20260206-120000/
+├── progress.json       # Machine-readable progress
+├── progress.md         # Human-readable progress
+├── code-analysis.json  # Routes, forms, framework info
+├── coverage-summary.md # Coverage metrics
+├── report.md           # Final audit report
+├── review-decisions.json # Finding review decisions
+├── checkpoint.json     # Resume checkpoint
+├── pages/              # Page inventory files
+├── findings/           # Finding detail files
+└── screenshots/        # Page screenshots
 ```
+
+## Development
+
+```bash
+npm install
+npm run typecheck    # TypeScript type checking
+npm test             # Run tests (watch mode)
+npm run test:run     # Run tests once
+npm run test:coverage # Run with coverage
+npm run build        # Compile TypeScript
+```
+
+## Parallel Mode
+
+When `--parallel` is enabled, the agent fans out work using the JobRunner:
+
+- **Exploration**: Routes grouped by prefix, explored concurrently
+- **Form Testing**: Each form tested independently in parallel
+- **Finding Review**: Three review lenses (security, UX, adversarial) run simultaneously
+
+Browser access is serialized via the BrowserQueue (exclusive lease pattern). Non-browser work runs truly in parallel.
+
+## Safety
+
+The agent automatically classifies environments:
+
+| Environment | Detection | Safe Mode |
+|-------------|-----------|-----------|
+| Development | localhost, 127.0.0.1, *.local, non-standard ports | Off |
+| Staging | *.staging.*, *.stg.*, *.test.* | Off |
+| Production | Real TLDs, standard ports | **On** |
+
+Safe mode prevents destructive form submissions, account modifications, and data deletions.
 
 ## Stopping an Audit
-
-To gracefully stop a running audit:
 
 ```bash
 touch .complete-agent/audits/current/stop.flag
 ```
-
-## Current Status
-
-**All Phases Complete (v1.0)** - Full audit capability implemented:
-
-### Phase 0-2, 4: Foundation (MVP)
-- [x] Preflight checks (write access, browser, GitHub CLI, config)
-- [x] PRD parsing (features, user flows, out-of-scope items)
-- [x] Browser exploration via Claude for Chrome
-- [x] Code analysis (Next.js App Router)
-- [x] Route extraction and comparison
-- [x] Component analysis (forms, modals, auth patterns)
-- [x] Coverage metrics
-- [x] Progress tracking with queue-based estimates
-- [x] Stop flag support
-
-### Phase 3: Dashboard
-- [x] Progress file with completion estimates
-- [x] Last action timestamps
-- [x] Continue flag for pause/resume
-- [x] HTML dashboard with live progress display
-- [x] Stop/Continue buttons (with CLI fallback)
-
-### Phase 5: Authentication
-- [x] Data safety gating (production detection, safe mode)
-- [x] Credential management with env var substitution
-- [x] Login flow with retry logic
-- [x] External verification (OAuth, email, SMS pause/resume)
-- [x] Multi-permission testing with session isolation
-
-### Phase 6: Test Execution
-- [x] Safe mode enforcement for destructive actions
-- [x] Flow execution engine
-- [x] Form testing (all control types)
-- [x] Edge case generation
-- [x] Real-time feature testing
-
-### Phase 7: Finding Generation
-- [x] Evidence collection (screenshots, console errors)
-- [x] Finding classification (severity, confidence)
-- [x] LLM critique pass for quality filtering
-- [x] Deduplication
-- [x] Privacy/screenshot retention policy
-
-### Phase 8: Reporting & Issues
-- [x] Report generation (report.md)
-- [x] Interactive finding review and approval
-- [x] GitHub issue creation from approved findings
-- [x] Screenshot upload to issues
-- [x] Finding grouping by feature area
-
-### Phase 9: Verification
-- [x] `/complete-verify gh issue #42` command
-- [x] Issue tracking and reproduction data
-- [x] Regression testing on related areas
-- [x] Step budgeting (20 default, 10 in safe mode)
-
-### Phase 10: Polish
-- [x] Checkpoint/resume for interrupted audits
-- [x] Error recovery (network, page crashes, modals)
-- [x] Focused audit mode (`--focus`)
-- [x] Cleanup command (`--cleanup`)
-
-## Live Dashboard
-
-Monitor audit progress in real-time:
-
-```bash
-npx serve .complete-agent
-# Open http://localhost:3000/dashboard/
-```
-
-### Tested On
-
-- PostCraft (Next.js 14+ app)
-  - 47% page coverage (8 of 17 pages)
-  - 20 PRD features extracted and mapped
-  - 3 forms, 1 modal identified
-  - 0 findings (app functioning correctly)
-
-## Documentation
-
-See [PRD.md](./PRD.md) for full requirements and [plan.md](./plan.md) for implementation phases.
 
 ## License
 

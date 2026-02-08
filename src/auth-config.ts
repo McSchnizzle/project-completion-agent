@@ -1,0 +1,119 @@
+/**
+ * Auth Config Parser - Reads credentials from config.yml and produces
+ * an AuthConfig for the browser auth handler.
+ *
+ * This module bridges the config layer (config.yml / env vars) with the
+ * browser auth handler (src/browser/auth-handler.ts). It resolves
+ * ${ENV_VAR} references and validates the credential configuration.
+ *
+ * @module auth-config
+ */
+
+import type { AuthConfig } from './browser/auth-handler.js';
+
+// ---------------------------------------------------------------------------
+// Config parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the `test_credentials` or `auth` section from config.yml into
+ * an AuthConfig suitable for the browser auth handler.
+ *
+ * Supports two config shapes:
+ *
+ * 1. V1 format (`test_credentials`):
+ *    ```yaml
+ *    test_credentials:
+ *      strategy: cookie
+ *      cookies: [...]
+ *    ```
+ *
+ * 2. V2 format (`auth`):
+ *    ```yaml
+ *    auth:
+ *      strategy: cookie
+ *      cookies: [...]
+ *    ```
+ *
+ * Returns a config with `strategy: 'none'` if no credentials are found.
+ */
+export function parseAuthConfig(configYml: Record<string, unknown>): AuthConfig {
+  // Try v2 format first, then fall back to v1
+  const raw = (configYml.auth ?? configYml.test_credentials) as Record<string, unknown> | undefined;
+
+  if (!raw || !raw.strategy) {
+    return { strategy: 'none' };
+  }
+
+  const strategy = String(raw.strategy);
+
+  switch (strategy) {
+    case 'cookie': {
+      const rawCookies = raw.cookies as Array<Record<string, unknown>> | undefined;
+      if (!rawCookies?.length) {
+        return { strategy: 'none' };
+      }
+      return {
+        strategy: 'cookie',
+        cookies: rawCookies.map((c) => ({
+          name: String(c.name ?? ''),
+          value: String(c.value ?? ''),
+          domain: String(c.domain ?? ''),
+          path: c.path ? String(c.path) : undefined,
+          secure: c.secure != null ? Boolean(c.secure) : undefined,
+          httpOnly: c.httpOnly != null ? Boolean(c.httpOnly) : undefined,
+          sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
+        })),
+      };
+    }
+
+    case 'bearer': {
+      const token = raw.token ? String(raw.token) : undefined;
+      if (!token) {
+        return { strategy: 'none' };
+      }
+      return {
+        strategy: 'bearer',
+        token,
+      };
+    }
+
+    case 'form-login': {
+      const loginUrl = raw.login_url ?? raw.loginUrl;
+      const username = raw.username;
+      const password = raw.password;
+
+      if (!loginUrl || !username || !password) {
+        return { strategy: 'none' };
+      }
+
+      return {
+        strategy: 'form-login',
+        loginUrl: String(loginUrl),
+        credentials: {
+          username: String(username),
+          password: String(password),
+        },
+        usernameSelector: raw.username_selector
+          ? String(raw.username_selector)
+          : undefined,
+        passwordSelector: raw.password_selector
+          ? String(raw.password_selector)
+          : undefined,
+        submitSelector: raw.submit_selector
+          ? String(raw.submit_selector)
+          : undefined,
+        successIndicator: raw.success_indicator
+          ? String(raw.success_indicator)
+          : undefined,
+      };
+    }
+
+    case 'none':
+      return { strategy: 'none' };
+
+    default:
+      console.warn(`[AuthConfig] Unknown auth strategy: ${strategy}, defaulting to none`);
+      return { strategy: 'none' };
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/finding.json",
+  "title": "Finding",
+  "description": "A single finding from the audit",
+  "type": "object",
+  "required": ["schema_version", "id", "source", "type", "severity", "title", "description", "location", "evidence", "verification", "signature"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of this schema"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^finding-\\d{3}$",
+      "description": "Unique finding identifier"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["code-scan", "explore", "test", "responsive", "security", "codex-review"],
+      "description": "Which stage discovered this finding"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["security", "quality", "ui", "functionality", "performance", "accessibility"],
+      "description": "Category of finding"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3", "P4"],
+      "description": "Priority level (P0=critical, P4=info)"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 200,
+      "description": "Short descriptive title"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 20,
+      "description": "Detailed description of the issue"
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": ["string", "null"],
+          "description": "Source file path (for code findings)"
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Line number in file"
+        },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "URL where issue was found (for browser findings)"
+        },
+        "selector": {
+          "type": ["string", "null"],
+          "description": "CSS selector for element (if applicable)"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "screenshot_id": {
+          "type": ["string", "null"],
+          "description": "Reference to screenshot in manifest"
+        },
+        "code_snippet": {
+          "type": ["string", "null"],
+          "description": "Relevant code excerpt"
+        },
+        "expected": {
+          "type": ["string", "null"],
+          "description": "Expected behavior"
+        },
+        "actual": {
+          "type": ["string", "null"],
+          "description": "Actual observed behavior"
+        },
+        "steps_to_reproduce": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Steps to reproduce the issue"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["required", "method"],
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "description": "Whether verification is needed"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["file_check", "browser_repro", "manual", "none"],
+          "description": "How to verify this finding"
+        },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["pending", "VERIFIED", "FLAKY", "COULD_NOT_REPRODUCE", "VERIFICATION_ERROR", "NOT_APPLICABLE", null],
+          "description": "Verification result"
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attempt": {"type": "integer"},
+              "reproduced": {"type": "boolean"},
+              "timestamp": {"type": "string", "format": "date-time"},
+              "error": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "description": "Deterministic hash for deduplication"
+    },
+    "prd_feature_id": {
+      "type": ["string", "null"],
+      "description": "Related PRD feature ID"
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Confidence score (0-100)"
+    },
+    "labels": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Labels like [FLAKY], [NEEDS CLARIFICATION]"
+    },
+    "issue_number": {
+      "type": ["integer", "null"],
+      "description": "GitHub issue number if created"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

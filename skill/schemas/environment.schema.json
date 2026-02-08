@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/environment.json",
+  "title": "Environment",
+  "description": "Environment configuration for the audit",
+  "type": "object",
+  "required": ["schema_version", "audit_id", "target_url", "is_production_data", "safe_mode", "detection_method"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "audit_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "target_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "codebase_path": {
+      "type": ["string", "null"]
+    },
+    "is_production_data": {
+      "type": "boolean"
+    },
+    "safe_mode": {
+      "type": "boolean"
+    },
+    "detection_method": {
+      "type": "string",
+      "enum": ["cli_flag", "config", "hostname_pattern", "default", "user_override"]
+    },
+    "browser_mode": {
+      "type": "string",
+      "enum": ["mcp", "playwright", "none"]
+    },
+    "github_authenticated": {
+      "type": "boolean"
+    },
+    "github_repo": {
+      "type": ["string", "null"]
+    },
+    "auth_method": {
+      "type": ["string", "null"],
+      "enum": ["none", "password", "sso", "token", null]
+    },
+    "session_restore_limitations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "List of session restoration limitations (e.g., HttpOnly cookies)"
+    },
+    "config_path": {
+      "type": ["string", "null"]
+    },
+    "prd_path": {
+      "type": ["string", "null"]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/page.json",
+  "title": "Page",
+  "description": "Information about a visited page during exploration",
+  "type": "object",
+  "required": ["schema_version", "id", "url", "canonical_url", "route_pattern", "visited_at"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^page-\\d{3}$"
+    },
+    "url": {
+      "type": "string"
+    },
+    "canonical_url": {
+      "type": "string"
+    },
+    "route_pattern": {
+      "type": "string",
+      "description": "Parameterized route pattern, e.g., /tasks/{id}"
+    },
+    "route_id": {
+      "type": "string",
+      "description": "Hash of method + canonical route"
+    },
+    "title": {
+      "type": ["string", "null"]
+    },
+    "visited_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["code_analysis", "link_discovery", "user_specified", "queue"]
+    },
+    "screenshot_id": {
+      "type": ["string", "null"]
+    },
+    "forms_observed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "action": {"type": ["string", "null"]},
+          "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "type": {"type": "string"},
+                "required": {"type": "boolean"},
+                "maxlength": {"type": ["integer", "null"]},
+                "pattern": {"type": ["string", "null"]},
+                "min": {"type": ["number", "null"]},
+                "max": {"type": ["number", "null"]}
+              }
+            }
+          },
+          "validation_gaps": {"type": "array", "items": {"type": "string"}},
+          "tested": {"type": "boolean"},
+          "classification": {"type": "string", "enum": ["CREATE", "UPDATE", "DELETE", "SEARCH", "AUTH", "UNKNOWN"]}
+        }
+      }
+    },
+    "actions_found": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "selector": {"type": "string"},
+          "text": {"type": "string"},
+          "type": {"type": "string", "enum": ["button", "link", "input", "other"]},
+          "classification": {"type": "string", "enum": ["READ", "CREATE", "UPDATE", "DELETE", "DANGEROUS", "UNKNOWN"]},
+          "tested": {"type": "boolean"}
+        }
+      }
+    },
+    "links_discovered": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "findings_count": {
+      "type": "integer"
+    },
+    "browser_test_status": {
+      "type": "string",
+      "enum": ["success", "partial", "failed", "skipped"]
+    },
+    "error_scenarios_tested": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {"type": "string"},
+          "result": {"type": "string", "enum": ["pass", "fail", "error"]},
+          "details": {"type": "string"}
+        }
+      }
+    },
+    "viewport_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "viewport": {"type": "string"},
+          "width": {"type": "integer"},
+          "height": {"type": "integer"},
+          "screenshot_id": {"type": "string"},
+          "has_overflow": {"type": "boolean"},
+          "navigation_accessible": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

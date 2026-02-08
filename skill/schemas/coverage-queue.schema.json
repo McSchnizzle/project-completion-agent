@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/coverage-queue.json",
+  "title": "Coverage Queue",
+  "description": "URL queue for coverage-driven exploration",
+  "type": "object",
+  "required": ["schema_version", "created_at", "routes", "queue", "visited"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "routes": {
+      "type": "object",
+      "description": "All known routes keyed by route_id",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "route_id": {"type": "string"},
+          "pattern": {"type": "string", "description": "Parameterized route pattern, e.g., /tasks/{id}"},
+          "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+          "source": {"type": "string", "enum": ["code_analysis", "link_discovery", "user_specified", "sitemap"]},
+          "visited": {"type": "boolean"},
+          "visit_count": {"type": "integer"},
+          "priority": {"type": "integer", "description": "Higher = more important"},
+          "requires_auth": {"type": "boolean"},
+          "sample_urls": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "queue": {
+      "type": "array",
+      "description": "URLs waiting to be visited, ordered by priority",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string"},
+          "route_id": {"type": "string"},
+          "priority": {"type": "integer"},
+          "source": {"type": "string", "enum": ["code_analysis", "link_discovery", "user_specified", "queue"]},
+          "added_at": {"type": "string", "format": "date-time"},
+          "retry_count": {"type": "integer"},
+          "requires_auth": {"type": "boolean"},
+          "parent_url": {"type": ["string", "null"], "description": "URL that linked to this one"}
+        }
+      }
+    },
+    "visited": {
+      "type": "array",
+      "description": "URLs that have been visited",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string"},
+          "canonical_url": {"type": "string"},
+          "route_id": {"type": "string"},
+          "visited_at": {"type": "string", "format": "date-time"},
+          "status": {"type": "string", "enum": ["success", "error", "timeout", "auth_required"]},
+          "page_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "coverage_metrics": {
+      "type": "object",
+      "properties": {
+        "routes_from_code": {"type": "integer"},
+        "routes_discovered": {"type": "integer"},
+        "routes_visited": {"type": "integer"},
+        "routes_skipped": {"type": "integer"},
+        "coverage_percent": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
+    "safety_guardrails": {
+      "type": "object",
+      "properties": {
+        "max_pages_per_route": {"type": "integer", "default": 3},
+        "max_total_pages": {"type": "integer", "default": 100},
+        "excluded_patterns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Regex patterns for URLs to skip"
+        },
+        "required_domain": {"type": "string"},
+        "allow_subdomains": {"type": "boolean"}
+      }
+    }
+  }
+}

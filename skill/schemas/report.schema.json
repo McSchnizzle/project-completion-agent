@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/report.json",
+  "title": "Audit Report",
+  "description": "Final audit report with all findings and recommendations",
+  "type": "object",
+  "required": ["schema_version", "audit_id", "generated_at", "summary", "findings", "coverage", "recommendations"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "audit_id": {
+      "type": "string",
+      "pattern": "^audit-\\d{8}-\\d{6}$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "application": {
+      "type": "object",
+      "properties": {
+        "name": {"type": ["string", "null"]},
+        "url": {"type": "string"},
+        "framework": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "grade": {
+          "type": "string",
+          "enum": ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F"]
+        },
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "status": {
+          "type": "string",
+          "enum": ["PASS", "PASS_WITH_WARNINGS", "NEEDS_ATTENTION", "FAIL"]
+        },
+        "headline": {"type": "string"},
+        "total_findings": {"type": "integer"},
+        "critical_issues": {"type": "integer"},
+        "verified_findings": {"type": "integer"},
+        "flaky_findings": {"type": "integer"},
+        "unverified_findings": {"type": "integer"}
+      }
+    },
+    "findings": {
+      "type": "object",
+      "properties": {
+        "by_severity": {
+          "type": "object",
+          "properties": {
+            "P0": {"type": "array", "items": {"$ref": "#/$defs/reportFinding"}},
+            "P1": {"type": "array", "items": {"$ref": "#/$defs/reportFinding"}},
+            "P2": {"type": "array", "items": {"$ref": "#/$defs/reportFinding"}},
+            "P3": {"type": "array", "items": {"$ref": "#/$defs/reportFinding"}},
+            "P4": {"type": "array", "items": {"$ref": "#/$defs/reportFinding"}}
+          }
+        },
+        "by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/reportFinding"}
+          }
+        },
+        "verification_summary": {
+          "type": "object",
+          "properties": {
+            "verified": {"type": "integer"},
+            "flaky": {"type": "integer"},
+            "could_not_reproduce": {"type": "integer"},
+            "verification_error": {"type": "integer"},
+            "not_applicable": {"type": "integer"}
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "routes": {
+          "type": "object",
+          "properties": {
+            "total": {"type": "integer"},
+            "visited": {"type": "integer"},
+            "percent": {"type": "number"}
+          }
+        },
+        "pages": {
+          "type": "object",
+          "properties": {
+            "total": {"type": "integer"},
+            "tested": {"type": "integer"}
+          }
+        },
+        "forms": {
+          "type": "object",
+          "properties": {
+            "total": {"type": "integer"},
+            "tested": {"type": "integer"},
+            "percent": {"type": "number"}
+          }
+        },
+        "viewports": {
+          "type": "object",
+          "properties": {
+            "tested": {"type": "array", "items": {"type": "string"}},
+            "issues_found": {"type": "integer"}
+          }
+        },
+        "code_analysis": {
+          "type": "object",
+          "properties": {
+            "files_analyzed": {"type": "integer"},
+            "languages": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "prd_comparison": {
+      "type": ["object", "null"],
+      "properties": {
+        "prd_path": {"type": "string"},
+        "requirements_total": {"type": "integer"},
+        "requirements_verified": {"type": "integer"},
+        "requirements_missing": {"type": "integer"},
+        "requirements_partial": {"type": "integer"},
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "requirement": {"type": "string"},
+              "status": {"type": "string", "enum": ["verified", "missing", "partial", "not_testable"]},
+              "evidence": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+          "category": {"type": "string"},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "related_findings": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "github_issues": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "finding_id": {"type": "string"},
+          "issue_number": {"type": "integer"},
+          "issue_url": {"type": "string"},
+          "created_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "duration_seconds": {"type": "number"},
+        "stages_completed": {"type": "array", "items": {"type": "string"}},
+        "stages_skipped": {"type": "array", "items": {"type": "string"}},
+        "browser_restarts": {"type": "integer"},
+        "errors_recovered": {"type": "integer"}
+      }
+    }
+  },
+  "$defs": {
+    "reportFinding": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "severity": {"type": "string", "enum": ["P0", "P1", "P2", "P3", "P4"]},
+        "category": {"type": "string"},
+        "description": {"type": "string"},
+        "location": {"type": "string"},
+        "verification_status": {"type": "string", "enum": ["VERIFIED", "FLAKY", "COULD_NOT_REPRODUCE", "VERIFICATION_ERROR", "NOT_APPLICABLE"]},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "github_issue": {"type": ["integer", "null"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/security-scan.json",
+  "title": "Security Scan",
+  "description": "Results from security vulnerability scanning",
+  "type": "object",
+  "required": ["schema_version", "scanned_at", "findings", "dependency_audit", "metrics"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "scanned_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "severity", "file", "message"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["hardcoded_secret", "sql_injection", "xss_vulnerability", "cors_misconfiguration", "missing_auth", "exposed_env", "insecure_dependency"]
+          },
+          "severity": {"type": "string", "enum": ["P0", "P1", "P2"]},
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"]},
+          "message": {"type": "string"},
+          "evidence": {"type": ["string", "null"]},
+          "recommendation": {"type": ["string", "null"]},
+          "cve": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "dependency_audit": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "offline_fallback", "skipped", "failed"]
+        },
+        "method": {
+          "type": ["string", "null"],
+          "enum": ["npm_audit", "yarn_audit", "advisory_db", null]
+        },
+        "advisory_db_status": {
+          "type": ["object", "null"],
+          "properties": {
+            "last_updated": {"type": "string", "format": "date-time"},
+            "age_days": {"type": "integer"},
+            "is_stale": {"type": "boolean"}
+          }
+        },
+        "vulnerabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "package": {"type": "string"},
+              "severity": {"type": "string"},
+              "vulnerable_versions": {"type": "string"},
+              "patched_versions": {"type": ["string", "null"]},
+              "cve": {"type": ["string", "null"]},
+              "title": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "files_scanned": {"type": "integer"},
+        "secrets_found": {"type": "integer"},
+        "potential_injections": {"type": "integer"},
+        "dependency_vulnerabilities": {"type": "integer"},
+        "p0_count": {"type": "integer"},
+        "p1_count": {"type": "integer"},
+        "p2_count": {"type": "integer"}
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/code-quality.json",
+  "title": "Code Quality Analysis",
+  "description": "Results from static code quality analysis",
+  "type": "object",
+  "required": ["schema_version", "analyzed_at", "languages", "findings", "metrics"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "analyzed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "codebase_path": {
+      "type": ["string", "null"]
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "files_count": {"type": "integer"},
+          "parser": {"type": "string", "enum": ["ast", "regex"]}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "file", "line", "message", "severity"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["todo", "fixme", "hack", "console_log", "unused_export", "unused_import", "high_complexity", "large_file", "deep_nesting", "commented_code"]
+          },
+          "file": {"type": "string"},
+          "line": {"type": "integer"},
+          "column": {"type": ["integer", "null"]},
+          "message": {"type": "string"},
+          "severity": {"type": "string", "enum": ["P2", "P3"]},
+          "context": {"type": ["string", "null"]},
+          "function_name": {"type": ["string", "null"]},
+          "complexity": {"type": ["integer", "null"]}
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "files_analyzed": {"type": "integer"},
+        "files_skipped": {"type": "integer"},
+        "total_todos": {"type": "integer"},
+        "total_fixmes": {"type": "integer"},
+        "console_logs": {"type": "integer"},
+        "unused_exports": {"type": "integer"},
+        "high_complexity_functions": {"type": "integer"},
+        "average_complexity": {"type": "number"}
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Paths that were excluded from analysis"
+    }
+  }
+}

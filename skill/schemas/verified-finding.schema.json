@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/verified-finding.json",
+  "title": "Verified Finding",
+  "description": "A finding after verification pass",
+  "type": "object",
+  "required": ["schema_version", "id", "original_finding_id", "verification_status", "final_severity", "verified_at"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^verified-\\d{3}$"
+    },
+    "original_finding_id": {
+      "type": "string"
+    },
+    "verification_status": {
+      "type": "string",
+      "enum": ["VERIFIED", "FLAKY", "COULD_NOT_REPRODUCE", "VERIFICATION_ERROR", "NOT_APPLICABLE"]
+    },
+    "original_severity": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3", "P4"]
+    },
+    "final_severity": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3", "P4"],
+      "description": "May be downgraded for COULD_NOT_REPRODUCE"
+    },
+    "severity_adjusted": {
+      "type": "boolean"
+    },
+    "adjustment_reason": {
+      "type": ["string", "null"]
+    },
+    "verification_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attempt": {"type": "integer"},
+          "reproduced": {"type": "boolean"},
+          "timestamp": {"type": "string", "format": "date-time"},
+          "error": {"type": ["string", "null"]},
+          "browser_healthy": {"type": "boolean"}
+        }
+      }
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "labels": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Labels like [FLAKY], [VERIFICATION ERROR], [UNVERIFIED]"
+    },
+    "include_in_report": {
+      "type": "boolean"
+    },
+    "create_github_issue": {
+      "type": "boolean"
+    },
+    "needs_manual_verification": {
+      "type": "boolean"
+    },
+    "original_finding": {
+      "type": "object",
+      "description": "Copy of the original finding data"
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://complete-agent.schema/progress.json",
+  "title": "Audit Progress",
+  "description": "Real-time progress tracking for audit sessions",
+  "type": "object",
+  "required": ["schema_version", "audit_id", "started_at", "status", "stages", "metrics"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "audit_id": {
+      "type": "string",
+      "pattern": "^audit-\\d{8}-\\d{6}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["initializing", "running", "paused", "completed", "failed", "stopped"]
+    },
+    "current_stage": {
+      "type": ["string", "null"],
+      "enum": ["preflight", "code-scan", "explore", "test", "responsive", "aggregate", "verify", "compare", "report", null]
+    },
+    "stages": {
+      "type": "object",
+      "properties": {
+        "preflight": {"$ref": "#/$defs/stageProgress"},
+        "code-scan": {"$ref": "#/$defs/stageProgress"},
+        "explore": {"$ref": "#/$defs/stageProgress"},
+        "test": {"$ref": "#/$defs/stageProgress"},
+        "responsive": {"$ref": "#/$defs/stageProgress"},
+        "aggregate": {"$ref": "#/$defs/stageProgress"},
+        "verify": {"$ref": "#/$defs/stageProgress"},
+        "compare": {"$ref": "#/$defs/stageProgress"},
+        "report": {"$ref": "#/$defs/stageProgress"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "pages_visited": {"type": "integer"},
+        "pages_total": {"type": "integer"},
+        "routes_covered": {"type": "integer"},
+        "routes_total": {"type": "integer"},
+        "findings_total": {"type": "integer"},
+        "findings_by_severity": {
+          "type": "object",
+          "properties": {
+            "P0": {"type": "integer"},
+            "P1": {"type": "integer"},
+            "P2": {"type": "integer"},
+            "P3": {"type": "integer"},
+            "P4": {"type": "integer"}
+          }
+        },
+        "verified_count": {"type": "integer"},
+        "flaky_count": {"type": "integer"},
+        "unverified_count": {"type": "integer"}
+      }
+    },
+    "focus_areas": {
+      "type": ["array", "null"],
+      "items": {"type": "string"},
+      "description": "User-specified focus areas for targeted audit"
+    },
+    "stop_flag": {
+      "type": "boolean",
+      "description": "Set to true when stop.flag file detected"
+    },
+    "checkpoint": {
+      "type": ["object", "null"],
+      "properties": {
+        "stage": {"type": "string"},
+        "state_file": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {"type": "string"},
+          "error": {"type": "string"},
+          "timestamp": {"type": "string", "format": "date-time"},
+          "recoverable": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stageProgress": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "running", "completed", "failed", "skipped"]
+        },
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "completed_at": {"type": ["string", "null"], "format": "date-time"},
+        "progress_percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "current_action": {"type": ["string", "null"]},
+        "items_processed": {"type": "integer"},
+        "items_total": {"type": "integer"},
+        "findings_count": {"type": "integer"}
+      }
+    }
+  }
+}

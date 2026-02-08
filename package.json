@@ -1,6 +1,6 @@
 {
   "name": "project-completion-agent",
-  "version": "0.75.4",
+  "version": "0.75.5",
   "description": "A Claude Code skill for auditing web applications for completeness",
   "main": "dist/src/cli.js",
   "types": "dist/src/cli.d.ts",

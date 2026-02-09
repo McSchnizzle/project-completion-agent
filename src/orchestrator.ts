@@ -24,6 +24,8 @@ import { dispatchPhase, type DispatchContext, type CostAccumulator } from './pha
 import { initializePhaseHandlers } from './phase-init.js';
 import { ArtifactStore } from './artifact-store.js';
 import { PlaywrightBrowser } from './playwright-browser.js';
+import { PlaywrightBrowserAdapter } from './playwright-browser-adapter.js';
+import type { BrowserBackend } from './browser-backend.js';
 import { JobRunner, type Job } from './job-runner.js';
 import { writeDashboard } from './dashboard-writer.js';
 import {
@@ -110,24 +112,40 @@ export async function runAudit(config: AuditConfig): Promise<AuditResult> {
     totalCalls: 0,
   };
 
-  // Step 2b: Create Playwright browser if needed
+  // Step 2b: Create browser backend (V4: wrapped in BrowserBackend adapter for full feature support)
+  let browserBackend: BrowserBackend | undefined;
   let playwrightBrowser: PlaywrightBrowser | undefined;
   if (config.browser !== 'none') {
-    playwrightBrowser = new PlaywrightBrowser({
-      authConfig: config.authConfig,
-    });
     try {
-      await playwrightBrowser.launch();
-      console.log(`[Orchestrator] Playwright browser launched${config.authConfig ? ` (auth: ${config.authConfig.strategy})` : ''}`);
+      const adapter = new PlaywrightBrowserAdapter({
+        type: 'playwright',
+        headless: true,
+        screenshots: true,
+        authConfig: config.authConfig,
+      });
+      const launched = await adapter.launch();
+      if (launched) {
+        browserBackend = adapter;
+        console.log(`[Orchestrator] Playwright browser launched via BrowserBackend adapter${config.authConfig ? ` (auth: ${config.authConfig.strategy})` : ''}`);
+      }
     } catch (error) {
-      console.warn(`[Orchestrator] Warning: Failed to launch Playwright browser: ${error}`);
-      console.warn(`[Orchestrator] Browser phases will proceed without browser data`);
-      playwrightBrowser = undefined;
+      console.warn(`[Orchestrator] Warning: BrowserBackend adapter failed: ${error}`);
+      // Fall back to raw PlaywrightBrowser for backward compatibility
+      try {
+        playwrightBrowser = new PlaywrightBrowser({
+          authConfig: config.authConfig,
+        });
+        await playwrightBrowser.launch();
+        console.log(`[Orchestrator] Playwright browser launched (legacy mode, V4 features disabled)`);
+      } catch (err2) {
+        console.warn(`[Orchestrator] Warning: Failed to launch Playwright browser: ${err2}`);
+        console.warn(`[Orchestrator] Browser phases will proceed without browser data`);
+      }
     }
   }
 
   // Step 2c: Register phase handlers with the dispatcher
-  initializePhaseHandlers(playwrightBrowser);
+  initializePhaseHandlers(browserBackend ?? playwrightBrowser);
 
   // Step 2d: Initialize action logger
   const actionLogger = ActionLogger.init(auditDir);
@@ -228,7 +246,14 @@ export async function runAudit(config: AuditConfig): Promise<AuditResult> {
   }
 
   // Step 8: Close browser
-  if (playwrightBrowser) {
+  if (browserBackend) {
+    try {
+      await browserBackend.close();
+      console.log(`[Orchestrator] Browser backend closed`);
+    } catch (error) {
+      console.warn(`[Orchestrator] Warning: Failed to close browser backend: ${error}`);
+    }
+  } else if (playwrightBrowser) {
     try {
       await playwrightBrowser.close();
       console.log(`[Orchestrator] Playwright browser closed`);
@@ -1047,6 +1072,11 @@ function updatePhaseProgress(
     if (status === 'completed' || status === 'failed') {
       stage.completed_at = new Date().toISOString();
       stage.progress_percent = 100;
+
+      // Update findings_count from disk when a phase completes
+      const totalFindings = countFindingsOnDisk(auditDir);
+      stage.findings_count = totalFindings;
+      progress.metrics.findings_total = totalFindings;
     }
 
     progress.updated_at = new Date().toISOString();
@@ -1116,6 +1146,14 @@ function isCriticalPhase(phaseName: PhaseName): boolean {
 }
 
 function countFindings(auditDir: string): number {
+  return countFindingsOnDisk(auditDir);
+}
+
+/**
+ * Count finding JSON files on disk and optionally tally by severity.
+ * Used by updatePhaseProgress to populate findings_count in progress.json.
+ */
+export function countFindingsOnDisk(auditDir: string): number {
   const findingDir = getFindingDir(auditDir);
   if (!fs.existsSync(findingDir)) return 0;
   try {

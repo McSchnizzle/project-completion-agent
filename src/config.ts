@@ -39,7 +39,7 @@ export interface AuditConfig {
   /** Suppress interactive prompts (auto-accept defaults). */
   nonInteractive: boolean;
   /** Browser backend used for page exploration and testing. */
-  browser: 'chrome' | 'playwright' | 'none';
+  browser: 'playwright' | 'none';
 
   // -- Scope --
 
@@ -85,6 +85,9 @@ export interface AuditConfig {
 
   /** Authentication configuration for browser sessions. */
   authConfig?: AuthConfig;
+
+  /** Path to a pre-authenticated browser profile directory (for oauth-redirect). */
+  browserProfile?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +204,8 @@ export function buildConfig(
   if (configYml.timeout_per_phase !== undefined) fromYml.timeoutPerPhase = Number(configYml.timeout_per_phase);
   if (configYml.safeMode !== undefined) fromYml.safeMode = Boolean(configYml.safeMode);
   if (configYml.safe_mode !== undefined) fromYml.safeMode = Boolean(configYml.safe_mode);
+  if (configYml.browserProfile !== undefined) fromYml.browserProfile = String(configYml.browserProfile);
+  if (configYml.browser_profile !== undefined) fromYml.browserProfile = String(configYml.browser_profile);
 
   // ---- Layer 2: environment variables -----------------------------------
 

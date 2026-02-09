@@ -21,6 +21,7 @@ import {
   DEFAULT_VIEWPORTS,
   type PageData,
 } from './playwright-browser.js';
+import type { BrowserBackend } from './browser-backend.js';
 import type { DispatchContext } from './phase-dispatcher.js';
 import {
   getPageDir,
@@ -30,6 +31,32 @@ import {
 import { ScreenshotCapture } from './screenshot-capture.js';
 import { CoverageTracker } from './coverage-tracker.js';
 import { RouteCrawler, type CrawlResult } from './browser/route-crawler.js';
+import { FindingGenerator } from './finding-generator.js';
+import { PageDiagnostics } from './page-diagnostics.js';
+import { InteractiveTester } from './interactive-tester.js';
+import { ResponsiveTester } from './responsive-tester.js';
+import { ApiSmokeTester } from './api-smoke-tester.js';
+import { EvidenceCapture } from './evidence-capture.js';
+
+/**
+ * Browser type accepted by phase helpers.
+ * Supports both legacy PlaywrightBrowser and the new BrowserBackend interface.
+ */
+type BrowserLike = PlaywrightBrowser | BrowserBackend;
+
+/**
+ * Type guard to check if a browser instance implements the full BrowserBackend interface.
+ * V4 modules (InteractiveTester, ResponsiveTester, etc.) require BrowserBackend.
+ */
+function isBrowserBackend(browser: BrowserLike): browser is BrowserBackend {
+  return (
+    'clickElement' in browser &&
+    'fillAndSubmitForm' in browser &&
+    'captureScreenshot' in browser &&
+    'clearBuffers' in browser &&
+    typeof (browser as BrowserBackend).clickElement === 'function'
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -83,7 +110,7 @@ function saveScreenshot(
  */
 export async function collectExplorationData(
   context: DispatchContext,
-  browser: PlaywrightBrowser,
+  browser: BrowserLike,
 ): Promise<Record<string, unknown>> {
   const routes = readRoutes(context);
   const baseUrl = (context.url as string).replace(/\/+$/, '');
@@ -115,8 +142,22 @@ export async function collectExplorationData(
     depth: number,
   ): Promise<CrawlResult> => {
     const startTime = Date.now();
+    // V4: Clear console/network buffers before each visit
+    if (isBrowserBackend(browser)) {
+      browser.clearBuffers();
+    }
     try {
       const data = await browser.visitPage(url);
+
+      // V4: Attach buffered network/console data from BrowserBackend
+      // so PageDiagnostics can detect slow requests and JS errors
+      if (isBrowserBackend(browser)) {
+        const networkRequests = browser.getNetworkRequests();
+        if (networkRequests.length > 0) {
+          (data as any).networkRequests = networkRequests;
+        }
+      }
+
       pages.push(data);
 
       // Save screenshot
@@ -171,6 +212,102 @@ export async function collectExplorationData(
   // Build summary for prompt context
   const coverageReport = coverageTracker.getReport();
 
+  // V4: Generate findings autonomously from exploration data
+  const findingGenerator = new FindingGenerator(context.auditDir);
+  const explorationFindings = findingGenerator.generateFromExploration(pages);
+
+  // V4: Run diagnostics on collected pages and save alongside page inventory
+  const diagnostics = new PageDiagnostics();
+  const diagnosticReports = pages.map((p, i) => {
+    const report = diagnostics.analyzePage(p as any);
+    // Save diagnostic data alongside page JSON
+    try {
+      const pageDir = getPageDir(context.auditDir);
+      fs.writeFileSync(
+        path.join(pageDir, `page-${i}-diagnostics.json`),
+        JSON.stringify(report, null, 2),
+      );
+    } catch { /* skip write errors */ }
+    return report;
+  });
+  const diagnosticFindings = findingGenerator.generateFromDiagnostics(diagnosticReports);
+
+  // Collect all auto-generated findings
+  const allAutoFindings = [...explorationFindings, ...diagnosticFindings];
+
+  // V4: Run interactive testing on discovered pages (requires BrowserBackend)
+  let interactionFindingCount = 0;
+  if (isBrowserBackend(browser)) {
+    try {
+      const interactiveTester = new InteractiveTester(browser, {
+        maxElementsPerPage: 10,
+        safeMode: true,
+        testNavigationLinks: false,
+      });
+
+      // Test top pages (limit to avoid excessive testing)
+      const pagesToTest = pages.slice(0, 10);
+      for (const page of pagesToTest) {
+        try {
+          const interactionResult = await interactiveTester.testPage(page.url);
+          // Convert to finding-generator compatible format
+          const fgResults = [{
+            url: interactionResult.url,
+            elementsTested: interactionResult.elementsTested.map((t) => ({
+              url: t.url,
+              element: { text: t.element.text, elementType: t.element.elementType },
+              hasError: t.hasError,
+              description: t.description,
+              consoleErrors: t.consoleErrors.map((e) => ({ text: e.text })),
+              failedRequests: t.failedRequests.map((r) => ({
+                method: r.method,
+                url: r.url,
+                status: r.status,
+              })),
+            })),
+          }];
+          const interactionFindings = findingGenerator.generateFromInteractions(fgResults);
+          allAutoFindings.push(...interactionFindings);
+          interactionFindingCount += interactionFindings.length;
+        } catch (err) {
+          console.warn(`[Exploration] Interactive testing failed for ${page.url}: ${err}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Exploration] Interactive tester initialization failed: ${err}`);
+    }
+  }
+
+  // Write auto-generated findings to disk
+  if (allAutoFindings.length > 0) {
+    const findingDir = getFindingDir(context.auditDir);
+    fs.mkdirSync(findingDir, { recursive: true });
+    for (const finding of allAutoFindings) {
+      fs.writeFileSync(
+        path.join(findingDir, `${finding.id}.json`),
+        JSON.stringify(finding, null, 2),
+      );
+    }
+  }
+
+  // V4: Attach evidence screenshots to findings after they're written
+  const evidenceCount = await runEvidenceCaptureForFindings(context.auditDir, browser);
+  if (evidenceCount > 0) {
+    console.log(`[Exploration] Attached evidence to ${evidenceCount} findings`);
+  }
+
+  // V4: Build diagnostic summary for prompt context
+  const diagnosticSummary = diagnosticReports.map((r) => ({
+    url: r.url,
+    diagnoseCount: r.diagnoses.length,
+    diagnoses: r.diagnoses.map((d) => ({
+      category: d.category,
+      severity: d.severity,
+      title: d.title,
+    })),
+    stats: r.stats,
+  }));
+
   return {
     pagesVisited: pages.length,
     routes: routes.slice(0, maxPages),
@@ -194,6 +331,9 @@ export async function collectExplorationData(
     })),
     screenshotCount: screenshotCapture.getCount(),
     storageUsed: screenshotCapture.getStorageUsed(),
+    autoFindingsCount: allAutoFindings.length,
+    interactionFindingCount,
+    diagnosticSummary,
   };
 }
 
@@ -202,7 +342,7 @@ export async function collectExplorationData(
  */
 export async function collectFormTestingData(
   context: DispatchContext,
-  browser: PlaywrightBrowser,
+  browser: BrowserLike,
 ): Promise<Record<string, unknown>> {
   const pageDir = getPageDir(context.auditDir);
   const forms: Array<{ url: string; forms: any[] }> = [];
@@ -226,9 +366,88 @@ export async function collectFormTestingData(
     }
   }
 
+  // V4: Run API smoke testing (requires BrowserBackend)
+  let apiSmokeResults: Record<string, unknown> = {};
+  if (isBrowserBackend(browser)) {
+    try {
+      const baseUrl = (context.url as string).replace(/\/+$/, '');
+      const smokeTester = new ApiSmokeTester(browser, baseUrl);
+
+      // Discover endpoints from code analysis
+      const codeAnalysisPath = path.join(context.auditDir, 'code-analysis.json');
+      let codeAnalysis: Record<string, unknown> | undefined;
+      if (fs.existsSync(codeAnalysisPath)) {
+        try {
+          codeAnalysis = JSON.parse(fs.readFileSync(codeAnalysisPath, 'utf-8'));
+        } catch { /* ignore */ }
+      }
+
+      const endpoints = smokeTester.discoverEndpoints(codeAnalysis);
+      if (endpoints.length > 0) {
+        const smokeReport = await smokeTester.testEndpoints(endpoints);
+
+        // Generate findings from smoke results
+        if (smokeReport.findings.length > 0) {
+          const findingGenerator = new FindingGenerator(context.auditDir);
+          // Convert ApiSmokeTester findings to finding-generator compatible format
+          const fgReport = {
+            baseUrl,
+            testedAt: new Date().toISOString(),
+            endpoints: smokeReport.results.map((r) => ({
+              url: r.endpoint.path.startsWith('http')
+                ? r.endpoint.path
+                : `${baseUrl}${r.endpoint.path}`,
+              method: r.endpoint.method,
+              status: r.status,
+              durationMs: r.durationMs,
+            })),
+            findings: smokeReport.findings.map((f) => ({
+              title: f.title,
+              severity: f.severity,
+              url: f.url,
+              description: f.description,
+              evidence: {
+                status: f.evidence.status,
+                statusText: undefined,
+                responseBody: f.evidence.responsePreview,
+              },
+            })),
+          };
+          const smokeFindings = findingGenerator.generateFromApiSmoke(fgReport);
+
+          // Write findings to disk
+          const findingDir = getFindingDir(context.auditDir);
+          fs.mkdirSync(findingDir, { recursive: true });
+          for (const finding of smokeFindings) {
+            fs.writeFileSync(
+              path.join(findingDir, `${finding.id}.json`),
+              JSON.stringify(finding, null, 2),
+            );
+          }
+
+          apiSmokeResults = {
+            endpointsDiscovered: endpoints.length,
+            endpointsTested: smokeReport.results.length,
+            smokeFindingsCount: smokeFindings.length,
+            stats: smokeReport.stats,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`[FormTesting] API smoke testing failed: ${err}`);
+    }
+  }
+
+  // V4: Attach evidence screenshots after form/API findings
+  const formEvidenceCount = await runEvidenceCaptureForFindings(context.auditDir, browser);
+  if (formEvidenceCount > 0) {
+    console.log(`[FormTesting] Attached evidence to ${formEvidenceCount} findings`);
+  }
+
   return {
     discoveredForms: forms,
     formCount: forms.reduce((n, f) => n + f.forms.length, 0),
+    ...apiSmokeResults,
   };
 }
 
@@ -239,7 +458,7 @@ export async function collectFormTestingData(
  */
 export async function collectResponsiveData(
   context: DispatchContext,
-  browser: PlaywrightBrowser,
+  browser: BrowserLike,
 ): Promise<Record<string, unknown>> {
   const baseUrl = (context.url as string).replace(/\/+$/, '');
   const routes = readRoutes(context).slice(0, 5); // Test top 5 routes
@@ -286,7 +505,61 @@ export async function collectResponsiveData(
     }
   }
 
-  return { responsiveResults: results };
+  // V4: Generate responsive findings (requires BrowserBackend)
+  let responsiveFindingCount = 0;
+  if (isBrowserBackend(browser)) {
+    try {
+      const responsiveTester = new ResponsiveTester(browser);
+      const testUrls = routes
+        .slice(0, 5)
+        .map((r) => (r.startsWith('http') ? r : `${baseUrl}${r}`));
+      const responsiveResults = await responsiveTester.testPages(testUrls);
+
+      // Convert to finding-generator compatible format and write findings
+      const findingGenerator = new FindingGenerator(context.auditDir);
+      const fgResults = responsiveResults.map((r) => ({
+        url: r.url,
+        findings: r.findings.map((f) => ({
+          title: f.title,
+          severity: f.severity as 'P0' | 'P1' | 'P2' | 'P3' | 'P4',
+          url: f.url,
+          viewport: f.viewport,
+          description: f.description,
+        })),
+      }));
+      const responsiveFindings = findingGenerator.generateFromResponsive(fgResults);
+      responsiveFindingCount = responsiveFindings.length;
+
+      if (responsiveFindings.length > 0) {
+        const findingDir = getFindingDir(context.auditDir);
+        fs.mkdirSync(findingDir, { recursive: true });
+        for (const finding of responsiveFindings) {
+          fs.writeFileSync(
+            path.join(findingDir, `${finding.id}.json`),
+            JSON.stringify(finding, null, 2),
+          );
+        }
+      }
+
+      // Save viewport screenshots for findings
+      for (let i = 0; i < responsiveResults.length; i++) {
+        const r = responsiveResults[i];
+        responsiveTester.saveViewportScreenshots(
+          context.auditDir, r.findings, r.viewportResults, i,
+        );
+      }
+    } catch (err) {
+      console.warn(`[Responsive] Responsive tester finding generation failed: ${err}`);
+    }
+  }
+
+  // V4: Attach evidence screenshots after responsive findings
+  const responsiveEvidenceCount = await runEvidenceCaptureForFindings(context.auditDir, browser);
+  if (responsiveEvidenceCount > 0) {
+    console.log(`[Responsive] Attached evidence to ${responsiveEvidenceCount} findings`);
+  }
+
+  return { responsiveResults: results, responsiveFindingCount };
 }
 
 /**
@@ -294,7 +567,7 @@ export async function collectResponsiveData(
  */
 export async function collectFindingQualityData(
   context: DispatchContext,
-  browser: PlaywrightBrowser,
+  browser: BrowserLike,
 ): Promise<Record<string, unknown>> {
   const findingDir = getFindingDir(context.auditDir);
   const findings: any[] = [];
@@ -316,7 +589,125 @@ export async function collectFindingQualityData(
     }
   }
 
-  return { findings, findingCount: findings.length };
+  // V4: Attach screenshot evidence to findings (requires BrowserBackend)
+  let evidenceCount = 0;
+  if (isBrowserBackend(browser) && findings.length > 0) {
+    try {
+      const screenshotCapture = new ScreenshotCapture(context.auditDir);
+      const evidenceCapture = new EvidenceCapture(browser, screenshotCapture, {
+        screenshotDir: getScreenshotDir(context.auditDir),
+      });
+
+      // Register existing screenshots for reuse
+      const screenshotDir = getScreenshotDir(context.auditDir);
+      if (fs.existsSync(screenshotDir)) {
+        const screenshotFiles = fs.readdirSync(screenshotDir).filter((f) => f.endsWith('.png'));
+        // Try to match screenshots to finding URLs by reading manifest
+        const manifestPath = path.join(screenshotDir, 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+          try {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+            if (Array.isArray(manifest.screenshots)) {
+              for (const entry of manifest.screenshots) {
+                if (entry.url && entry.path) {
+                  evidenceCapture.registerPageScreenshot(entry.url, entry.path);
+                }
+              }
+            }
+          } catch { /* ignore manifest parse errors */ }
+        }
+      }
+
+      const evidenceResults = await evidenceCapture.attachEvidence(findings);
+      evidenceCount = evidenceResults.filter((e) => e.screenshotPath && !e.screenshotPath.endsWith('.txt')).length;
+
+      // Re-write findings with updated screenshot evidence
+      for (const finding of findings) {
+        if (finding.evidence?.screenshots?.length > 0) {
+          try {
+            fs.writeFileSync(
+              path.join(findingDir, `${finding.id}.json`),
+              JSON.stringify(finding, null, 2),
+            );
+          } catch { /* skip write errors */ }
+        }
+      }
+    } catch (err) {
+      console.warn(`[FindingQuality] Evidence capture failed: ${err}`);
+    }
+  }
+
+  return { findings, findingCount: findings.length, evidenceCount };
+}
+
+/**
+ * Run evidence capture for findings produced during a browser phase.
+ * Reads finding JSON files from disk, attaches screenshot evidence,
+ * and re-writes the findings with updated evidence paths.
+ *
+ * Called after findings are written in collectExplorationData,
+ * collectFormTestingData, and collectResponsiveData.
+ */
+async function runEvidenceCaptureForFindings(
+  auditDir: string,
+  browser: BrowserLike,
+): Promise<number> {
+  if (!isBrowserBackend(browser)) return 0;
+
+  const findingDir = getFindingDir(auditDir);
+  if (!fs.existsSync(findingDir)) return 0;
+
+  const files = fs.readdirSync(findingDir).filter((f) => f.endsWith('.json'));
+  if (files.length === 0) return 0;
+
+  const findings: any[] = [];
+  for (const file of files) {
+    try {
+      findings.push(
+        JSON.parse(fs.readFileSync(path.join(findingDir, file), 'utf-8')),
+      );
+    } catch {
+      /* skip bad files */
+    }
+  }
+
+  // Only process findings without screenshot evidence
+  const needsEvidence = findings.filter(
+    (f) =>
+      !f.evidence?.screenshots ||
+      f.evidence.screenshots.length === 0,
+  );
+
+  if (needsEvidence.length === 0) return 0;
+
+  try {
+    const screenshotCapture = new ScreenshotCapture(auditDir);
+    const evidenceCapture = new EvidenceCapture(browser, screenshotCapture, {
+      screenshotDir: getScreenshotDir(auditDir),
+    });
+
+    const evidenceResults = await evidenceCapture.attachEvidence(needsEvidence);
+    let count = 0;
+
+    for (const finding of needsEvidence) {
+      if (finding.evidence?.screenshots?.length > 0) {
+        try {
+          fs.writeFileSync(
+            path.join(findingDir, `${finding.id}.json`),
+            JSON.stringify(finding, null, 2),
+          );
+          count++;
+        } catch {
+          /* skip write errors */
+        }
+      }
+    }
+
+    return count;
+  } catch (err) {
+    console.warn(`[EvidenceCapture] Post-phase evidence capture failed: ${err}`);
+    return 0;
+  }
 }
 
 /**
@@ -362,7 +753,7 @@ function isVisitableUrl(url: unknown): url is string {
  */
 export async function collectVerificationData(
   context: DispatchContext,
-  browser: PlaywrightBrowser,
+  browser: BrowserLike,
 ): Promise<Record<string, unknown>> {
   const findingDir = getFindingDir(context.auditDir);
   const findings = loadExistingFindings(findingDir);

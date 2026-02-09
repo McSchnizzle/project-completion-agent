@@ -15,7 +15,7 @@ import { buildConfig, AuditConfig } from './config.js';
 import { runAudit, runVerify, type AuditResult, type VerifyResult } from './orchestrator.js';
 
 /** Version extracted from package.json */
-const VERSION = '0.75.5';
+const VERSION = '0.75.6';
 
 /** Parsed CLI arguments ready to pass to buildConfig */
 export type CliArgs = Partial<AuditConfig> & {
@@ -43,7 +43,7 @@ Options:
   --cleanup                  Remove prior audit artifacts before starting
   --non-interactive          Suppress interactive prompts (auto-accept defaults)
   --parallel                 Allow independent phases to run concurrently
-  --browser <type>           Browser backend: chrome | playwright | none (default: chrome)
+  --browser <type>           Browser backend: playwright | none (default: playwright)
   --max-budget <usd>         Hard spending cap across the entire audit (default: 10)
   --max-pages <n>            Maximum number of pages to visit (default: 50)
   --max-forms <n>            Maximum number of forms to test (default: 20)
@@ -183,11 +183,11 @@ export function parseCliArgs(argv: string[] = process.argv): CliArgs {
   }
 
   if (values.browser) {
-    const browser = values.browser as 'chrome' | 'playwright' | 'none';
-    if (['chrome', 'playwright', 'none'].includes(browser)) {
+    const browser = values.browser as 'playwright' | 'none';
+    if (['playwright', 'none'].includes(browser)) {
       cliArgs.browser = browser;
     } else {
-      console.error(`Invalid browser type: ${browser}. Must be chrome, playwright, or none.`);
+      console.error(`Invalid browser type: ${browser}. Must be playwright or none.`);
       process.exit(1);
     }
   }

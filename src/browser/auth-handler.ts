@@ -11,7 +11,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type AuthStrategy = 'none' | 'cookie' | 'bearer' | 'form-login';
+export type AuthStrategy = 'none' | 'cookie' | 'bearer' | 'form-login' | 'oauth-redirect';
 
 export interface CookieSpec {
   name: string;
@@ -38,6 +38,16 @@ export interface AuthConfig {
   usernameSelector?: string;
   passwordSelector?: string;
   submitSelector?: string;
+  /** For 'oauth-redirect' strategy: URL to initiate OAuth (e.g., '/auth/google') */
+  oauthUrl?: string;
+  /** For 'oauth-redirect' strategy: glob pattern to wait for callback */
+  callbackPattern?: string;
+  /** OAuth provider hint */
+  provider?: 'google' | 'github' | 'supabase' | 'custom';
+  /** Timeout for OAuth redirect flow in milliseconds */
+  timeoutMs?: number;
+  /** Path to pre-authenticated browser profile (for oauth-redirect) */
+  browserProfile?: string;
 }
 
 export interface AuthResult {
@@ -74,6 +84,9 @@ export async function authenticate(
 
     case 'form-login':
       return applyFormLogin(context, config);
+
+    case 'oauth-redirect':
+      return applyOAuthRedirect(context, config);
 
     default:
       return {
@@ -314,6 +327,55 @@ async function applyFormLogin(
       success: false,
       strategy: 'form-login',
       message: `Form login failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+async function applyOAuthRedirect(
+  context: any,
+  config: AuthConfig,
+): Promise<AuthResult> {
+  if (!config.oauthUrl) {
+    return {
+      success: false,
+      strategy: 'oauth-redirect',
+      message: 'oauthUrl required for oauth-redirect strategy',
+    };
+  }
+
+  try {
+    const page = await context.newPage();
+    const timeout = config.timeoutMs ?? 30_000;
+
+    // Navigate to the OAuth initiation URL (e.g., /auth/google)
+    await page.goto(config.oauthUrl, {
+      waitUntil: 'networkidle',
+      timeout,
+    });
+
+    // Wait for redirect back to the callback URL.
+    // The user must have pre-authenticated in the browser profile so the
+    // provider auto-redirects without requiring credential entry.
+    const callbackPattern = config.callbackPattern ?? '**/callback**';
+    await page.waitForURL(callbackPattern, { timeout });
+
+    // Wait for the callback page to settle
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+
+    // Verify we're no longer on the OAuth provider
+    const finalUrl = page.url();
+    await page.close();
+
+    return {
+      success: true,
+      strategy: 'oauth-redirect',
+      message: `OAuth redirect completed, landed at: ${finalUrl}`,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      strategy: 'oauth-redirect',
+      message: `OAuth redirect failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

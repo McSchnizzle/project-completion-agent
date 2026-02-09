@@ -164,7 +164,7 @@ function extractFeatures(sections: MdSection[]): PrdFeature[] {
   let featureCounter = 0;
 
   // Sections whose headings suggest scope/non-feature content
-  const excludeHeadings = /\b(overview|introduction|background|roadmap|deployment|hosting|technical|stack|schema|implementation|appendix|changelog|history|out.of.scope|non.goal|future|deferred|phase\s+\d)/i;
+  const excludeHeadings = /\b(overview|introduction|background|roadmap|deployment|hosting|technical|stack|schema|implementation|appendix|changelog|history|out.of.scope|non.goal|future|deferred|phase\s+\d|prerequisite|getting.started|setup|installation|configuration|environment|dependencies|requirements|architecture|infrastructure|database|api.reference|error.handling|testing|monitoring|logging|security.consideration|performance|scalability|migration|maintenance|support|glossary|reference|faq|troubleshoot)/i;
   const flowHeadings = /\b(flow|process|workflow|journey|step|procedure)\b/i;
 
   for (const section of sections) {

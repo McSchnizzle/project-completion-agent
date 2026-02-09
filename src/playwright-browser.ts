@@ -47,6 +47,8 @@ export interface PageData {
   screenshot?: Buffer;
   consoleMessages: ConsoleMessage[];
   networkErrors: NetworkError[];
+  /** All network requests captured during page load (not just errors). */
+  networkRequests: CapturedNetworkRequest[];
   statusCode?: number;
   loadTimeMs?: number;
   isSPA?: boolean;
@@ -65,9 +67,23 @@ export interface NetworkError {
   method: string;
 }
 
+export interface CapturedNetworkRequest {
+  url: string;
+  status: number;
+  method: string;
+  duration?: number;
+  contentType?: string;
+}
+
 export interface FormData {
   action: string;
   method: string;
+  /** Whether the method attribute was explicitly set in HTML (vs DOM default). */
+  methodExplicit: boolean;
+  /** Whether the form has an onsubmit handler. */
+  hasSubmitHandler: boolean;
+  /** Whether an SPA framework was detected on the page. */
+  spaDetected: boolean;
   id?: string;
   name?: string;
   fields: FormField[];
@@ -227,6 +243,8 @@ export class PlaywrightBrowser {
       const page = await this.context.newPage();
       const consoleMessages: ConsoleMessage[] = [];
       const networkErrors: NetworkError[] = [];
+      const networkRequests: CapturedNetworkRequest[] = [];
+      const requestTimings = new Map<string, number>();
 
       // Collect console messages
       page.on('console', (msg: any) => {
@@ -237,12 +255,30 @@ export class PlaywrightBrowser {
         });
       });
 
-      // Collect network errors
+      // Track request start times for duration calculation
+      page.on('request', (request: any) => {
+        requestTimings.set(request.url(), Date.now());
+      });
+
+      // Collect ALL network responses (not just errors)
       page.on('response', (response: any) => {
+        const url = response.url();
         const status = response.status();
+        const startTime = requestTimings.get(url);
+        const duration = startTime ? Date.now() - startTime : undefined;
+
+        networkRequests.push({
+          url,
+          status,
+          method: response.request().method(),
+          duration,
+          contentType: response.headers()['content-type'] || undefined,
+        });
+
+        // Still capture errors separately for backward compat
         if (status >= 400) {
           networkErrors.push({
-            url: response.url(),
+            url,
             status,
             statusText: response.statusText(),
             method: response.request().method(),
@@ -289,9 +325,17 @@ export class PlaywrightBrowser {
           ),
       );
 
-      // Extract forms with enhanced field data
-      const forms: FormData[] = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('form')).map(
+      // Extract forms with enhanced field data (SPA-aware)
+      const forms: FormData[] = await page.evaluate(() => {
+        // Detect SPA frameworks by checking for well-known root elements
+        const spaDetected = !!(
+          document.querySelector('[data-reactroot], [id="__next"], [id="app"], [id="root"]') ||
+          (document as any).__vue_app__ ||
+          (window as any).__NUXT__ ||
+          (window as any).__NEXT_DATA__
+        );
+
+        return Array.from(document.querySelectorAll('form')).map(
           (form: HTMLFormElement) => {
             const fields = Array.from(
               form.querySelectorAll('input, select, textarea'),
@@ -337,16 +381,24 @@ export class PlaywrightBrowser {
               };
             });
 
+            // Check if method was EXPLICITLY set via getAttribute (not DOM default)
+            const explicitMethod = form.getAttribute('method');
+            const method = explicitMethod ? explicitMethod.toUpperCase() : 'GET';
+            const hasSubmitHandler = !!(form.onsubmit || form.getAttribute('onsubmit'));
+
             return {
               action: form.action || '',
-              method: (form.method || 'GET').toUpperCase(),
+              method,
+              methodExplicit: !!explicitMethod,
+              hasSubmitHandler,
+              spaDetected,
               id: form.id || undefined,
               name: form.name || undefined,
               fields,
             };
           },
-        ),
-      );
+        );
+      });
 
       // Capture screenshot
       let screenshot: Buffer | undefined;
@@ -366,6 +418,7 @@ export class PlaywrightBrowser {
         screenshot,
         consoleMessages,
         networkErrors,
+        networkRequests,
         statusCode,
         loadTimeMs,
         isSPA: this.isSPADetected,
@@ -565,6 +618,7 @@ export class PlaywrightBrowser {
       forms: [],
       consoleMessages: [],
       networkErrors: [],
+      networkRequests: [],
     };
   }
 }

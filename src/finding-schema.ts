@@ -199,6 +199,37 @@ export function createFinding(partial: Partial<Finding> & { title: string; type:
 }
 
 /**
+ * Stricter schema that requires at least one screenshot path in evidence.
+ * Used for validation warnings during report generation — findings that
+ * lack screenshots are logged but NOT rejected from the pipeline.
+ * Findings from `browser: none` or degraded Chrome MCP may have a .txt
+ * placeholder path instead of .png.
+ */
+export const ValidatedFindingSchema = FindingSchema.extend({
+  evidence: FindingEvidence.extend({
+    screenshots: z.array(z.string()).min(1),
+  }),
+});
+
+export type ValidatedFinding = z.infer<typeof ValidatedFindingSchema>;
+
+/**
+ * Check whether a finding has the minimum required screenshot evidence.
+ * Returns true if valid, false with warnings logged if missing.
+ * This is warning-only — it never throws or blocks the pipeline.
+ */
+export function checkScreenshotEvidence(finding: Finding): boolean {
+  const result = ValidatedFindingSchema.safeParse(finding);
+  if (!result.success) {
+    console.warn(
+      `[FindingSchema] Finding ${finding.id} missing screenshot evidence (has ${finding.evidence.screenshots.length} screenshots)`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
  * Validate an existing finding object (e.g. loaded from JSON).
  *
  * Returns a discriminated union with `success`, `data`, and `error` fields.

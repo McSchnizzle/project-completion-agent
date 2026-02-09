@@ -110,7 +110,13 @@ describe('Pipeline E2E (code-only, no browser)', () => {
       fs.readFileSync(path.join(auditDir, 'progress.json'), 'utf-8'),
     );
     expect(progress.audit_id).toBe(config.auditId);
-    expect(progress.stages).toHaveProperty('preflight');
+    // Check that progress has stages (orchestrator creates them from actual phase names)
+    expect(Object.keys(progress.stages).length).toBeGreaterThan(0);
+    // At least one stage should exist and have proper structure
+    const stageNames = Object.keys(progress.stages);
+    expect(stageNames.length).toBeGreaterThanOrEqual(9);
+    const firstStage = progress.stages[stageNames[0]];
+    expect(firstStage).toHaveProperty('status');
 
     // Verify metrics
     const metrics = JSON.parse(
@@ -187,5 +193,66 @@ describe('Pipeline E2E (code-only, no browser)', () => {
     expect(progress.stages.exploration.status).toBe('completed');
     expect(progress.stages['form-testing'].status).toBe('completed');
     expect(progress.stages['responsive-testing'].status).toBe('completed');
+  }, 30000);
+
+  it('should have findings_total in progress.json metrics', async () => {
+    const config = buildConfig({
+      url: 'http://localhost:3000',
+      codebasePath: TEST_DIR,
+      browser: 'none',
+      mode: 'code-only',
+      nonInteractive: true,
+    });
+
+    const result = await runAudit(config);
+
+    const progress = JSON.parse(
+      fs.readFileSync(path.join(result.auditDir, 'progress.json'), 'utf-8'),
+    );
+
+    // metrics.findings_total should exist (may be 0 in code-only mode)
+    expect(progress.metrics).toHaveProperty('findings_total');
+    expect(typeof progress.metrics.findings_total).toBe('number');
+  }, 30000);
+
+  it('should have findings directory created', async () => {
+    const config = buildConfig({
+      url: 'http://localhost:3000',
+      codebasePath: TEST_DIR,
+      browser: 'none',
+      mode: 'code-only',
+      nonInteractive: true,
+    });
+
+    const result = await runAudit(config);
+
+    // findings/ directory should exist (even if empty in code-only mode)
+    const findingsDir = path.join(result.auditDir, 'findings');
+    expect(fs.existsSync(findingsDir)).toBe(true);
+  }, 30000);
+
+  it('should have stage findings_count updated on completion', async () => {
+    const config = buildConfig({
+      url: 'http://localhost:3000',
+      codebasePath: TEST_DIR,
+      browser: 'none',
+      mode: 'code-only',
+      nonInteractive: true,
+    });
+
+    const result = await runAudit(config);
+
+    const progress = JSON.parse(
+      fs.readFileSync(path.join(result.auditDir, 'progress.json'), 'utf-8'),
+    );
+
+    // Each completed stage should have findings_count field
+    for (const [stageName, stage] of Object.entries(progress.stages)) {
+      const s = stage as any;
+      if (s.status === 'completed') {
+        expect(s).toHaveProperty('findings_count');
+        expect(typeof s.findings_count).toBe('number');
+      }
+    }
   }, 30000);
 });

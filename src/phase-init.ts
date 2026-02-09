@@ -23,6 +23,7 @@ import { generateReport } from './phases/report-generation.js';
 import { createGitHubIssues } from './phases/github-issues.js';
 import { runPolish } from './phases/polish.js';
 import type { PlaywrightBrowser } from './playwright-browser.js';
+import type { BrowserBackend } from './browser-backend.js';
 import {
   collectExplorationData,
   collectFormTestingData,
@@ -42,11 +43,12 @@ import { getProgressPath, getPageDir, getFindingDir } from './artifact-paths.js'
  * Must be called once before `dispatchPhase()` is invoked. Calling it
  * multiple times is safe (later registrations overwrite earlier ones).
  *
- * @param browser - Optional PlaywrightBrowser instance for browser phases.
+ * @param browser - Optional browser instance for browser phases.
+ *                  Accepts PlaywrightBrowser or any BrowserBackend implementation.
  *                  If omitted, browser collectors are not registered and
  *                  browser-claude phases proceed without browser data.
  */
-export function initializePhaseHandlers(browser?: PlaywrightBrowser): void {
+export function initializePhaseHandlers(browser?: PlaywrightBrowser | BrowserBackend): void {
   // ---------------------------------------------------------------------------
   // Pure-TS phase handlers
   // ---------------------------------------------------------------------------
@@ -106,7 +108,18 @@ export function initializePhaseHandlers(browser?: PlaywrightBrowser): void {
   // Quality pipeline pre-filter (pure-TS, runs before LLM critique)
   // ---------------------------------------------------------------------------
 
-  registerPureTsHandler('finding-quality', (ctx: DispatchContext) => {
+  registerPureTsHandler('finding-quality', async (ctx: DispatchContext) => {
+    // Step 1: Attach evidence screenshots to findings BEFORE quality scoring
+    // (findings without evidence score lower in the quality pipeline)
+    if (browser) {
+      try {
+        await collectFindingQualityData(ctx, browser);
+      } catch (err) {
+        console.warn(`[FindingQuality] Evidence capture failed, proceeding with quality pipeline: ${err}`);
+      }
+    }
+
+    // Step 2: Run quality pipeline on now-enriched findings
     return runQualityPipelineAndSave({
       auditDir: ctx.auditDir,
     });

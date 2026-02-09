@@ -470,6 +470,19 @@ If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
 
   // Step 5: Extract findings from LLM response and filter through quality gates
   const extractedFindings = extractFindings(response.content);
+
+  // Normalize evidence field from string to object
+  for (const finding of extractedFindings) {
+    if (typeof finding.evidence === 'string') {
+      finding.evidence = {
+        screenshots: [],
+        description: finding.evidence,
+      };
+    } else if (!finding.evidence) {
+      finding.evidence = { screenshots: [] };
+    }
+  }
+
   if (extractedFindings.length > 0) {
     // Run quality gate filters
     const filterResult = filterFindings(extractedFindings, visitedPages);
@@ -489,6 +502,7 @@ If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
       const findingId = (finding.id as string) || `F-${String(filterResult.accepted.indexOf(finding) + 1).padStart(3, '0')}`;
       finding.id = findingId;
       finding.phase = phaseName;
+      finding.source_phase = phaseName;
       finding.discovered_at = new Date().toISOString();
 
       const findingPath = path.join(findingDir, `${findingId}.json`);
@@ -496,6 +510,28 @@ If no issues are found, return: {"findings": [], "summary": "No issues found"}`;
     }
 
     console.log(`[Dispatcher] ${phaseName}: accepted ${filterResult.accepted.length}/${extractedFindings.length} findings`);
+  } else {
+    // Zero-finding guard: LLM returned 0 findings. Check if existing findings
+    // from THIS phase exist on disk (from autonomous generators). If so, preserve
+    // them rather than treating the empty LLM response as authoritative.
+    const findingDir = getFindingDir(context.auditDir);
+    if (fs.existsSync(findingDir)) {
+      const existingForPhase = fs.readdirSync(findingDir)
+        .filter((f) => f.endsWith('.json'))
+        .filter((f) => {
+          try {
+            const data = JSON.parse(fs.readFileSync(path.join(findingDir, f), 'utf-8'));
+            return data.source_phase === phaseName || data.phase === phaseName;
+          } catch {
+            return false;
+          }
+        });
+      if (existingForPhase.length > 0) {
+        console.log(
+          `[Dispatcher] ${phaseName}: LLM returned 0 findings but ${existingForPhase.length} existing findings from this phase preserved on disk`,
+        );
+      }
+    }
   }
 
   return {

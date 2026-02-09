@@ -252,14 +252,25 @@ function generateHeader(progress: Progress, pages: PageInventory[]): string {
 **Audit ID:** ${progress.audit_id}
 **Target URL:** ${targetUrl}
 **Started:** ${new Date(progress.started_at).toLocaleString()}
-**Completed:** ${progress.completed_at ? new Date(progress.completed_at).toLocaleString() : 'In Progress'}`;
+**Completed:** ${new Date().toLocaleString()}`;
 }
 
 /**
  * Generate methodology section
  */
 function generateMethodology(pageCount: number, authStrategy: string, progress: Progress): string {
-  const phasesCompleted = progress.completed_at ? '14/14' : 'in progress';
+  // Count completed stages dynamically instead of relying on completed_at
+  const stages = (progress as any).stages as Record<string, { status: string }> | undefined;
+  let phasesCompleted: string;
+  if (stages) {
+    const completedCount = Object.values(stages).filter(
+      (s) => s.status === 'completed',
+    ).length;
+    const totalCount = Object.keys(stages).length || 14;
+    phasesCompleted = `${completedCount}/${totalCount}`;
+  } else {
+    phasesCompleted = progress.completed_at ? '14/14' : 'in progress';
+  }
 
   return `## Methodology
 

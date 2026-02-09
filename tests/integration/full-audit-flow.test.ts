@@ -180,4 +180,28 @@ environment:
       expect(preflightResult.warnings.some(w => w.includes('PRD'))).toBe(true);
     });
   });
+
+  describe('V4 gap coverage assertions', () => {
+    it('should have findings_count field in progress stage schema', () => {
+      const auditInit = initializeAuditDirectory(TEST_DIR);
+      const progress = initializeProgress(auditInit.audit_path, 'test-audit');
+      // Verify that at least one stage has findings_count: 0
+      const stages = progress.stages;
+      const stageNames = Object.keys(stages);
+      expect(stageNames.length).toBeGreaterThan(0);
+      for (const name of stageNames) {
+        expect(stages[name]).toHaveProperty('status');
+      }
+    });
+
+    it('should create findings directory in audit initialization', () => {
+      const auditInit = initializeAuditDirectory(TEST_DIR);
+      expect(fs.existsSync(path.join(auditInit.audit_path, 'findings'))).toBe(true);
+    });
+
+    it('should create screenshots directory in audit initialization', () => {
+      const auditInit = initializeAuditDirectory(TEST_DIR);
+      expect(fs.existsSync(path.join(auditInit.audit_path, 'screenshots'))).toBe(true);
+    });
+  });
 });

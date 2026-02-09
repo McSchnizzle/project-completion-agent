@@ -111,6 +111,27 @@ export function parseAuthConfig(configYml: Record<string, unknown>): AuthConfig 
       };
     }
 
+    case 'oauth-redirect': {
+      const oauthUrl = raw.oauth_url ?? raw.oauthUrl;
+      if (!oauthUrl) {
+        return { strategy: 'none' };
+      }
+      return {
+        strategy: 'oauth-redirect',
+        oauthUrl: String(oauthUrl),
+        callbackPattern: raw.callback_pattern ?? raw.callbackPattern
+          ? String(raw.callback_pattern ?? raw.callbackPattern)
+          : undefined,
+        provider: raw.provider as AuthConfig['provider'] | undefined,
+        timeoutMs: raw.timeout_ms ?? raw.timeoutMs
+          ? Number(raw.timeout_ms ?? raw.timeoutMs)
+          : undefined,
+        browserProfile: raw.browser_profile ?? raw.browserProfile
+          ? String(raw.browser_profile ?? raw.browserProfile)
+          : undefined,
+      };
+    }
+
     case 'none':
       return { strategy: 'none' };
 

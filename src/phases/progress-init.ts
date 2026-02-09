@@ -102,18 +102,50 @@ export interface ProgressState {
  */
 export function initProgress(auditDir: string, config: AuditConfig): ProgressState {
   const now = new Date().toISOString();
+  const progressPath = getProgressPath(auditDir);
 
-  // Define all pipeline stages
+  // If progress already exists (created by orchestrator), merge into it
+  // rather than overwriting with hardcoded stage names
+  if (fs.existsSync(progressPath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(progressPath, 'utf-8')) as ProgressState & { target_url?: string; coverage?: Record<string, unknown> };
+      existing.updated_at = now;
+      // Add coverage tracking metadata if not present
+      if (!existing.coverage) {
+        (existing as any).coverage = {
+          pages_visited: 0,
+          forms_tested: 0,
+          features_checked: 0,
+        };
+      }
+      fs.writeFileSync(progressPath, JSON.stringify(existing, null, 2), 'utf-8');
+
+      // Write progress.md
+      const progressMdPath = path.join(auditDir, 'progress.md');
+      const markdown = generateProgressMarkdown(existing, config);
+      fs.writeFileSync(progressMdPath, markdown, 'utf-8');
+
+      console.log(`\n📊 Progress tracking merged: ${progressPath}`);
+      console.log(`📝 Progress summary: ${progressMdPath}\n`);
+
+      return existing;
+    } catch {
+      // Fall through to fresh creation if parse fails
+    }
+  }
+
+  // Fallback: create fresh (shouldn't happen in normal flow since
+  // orchestrator creates progress first, but needed for standalone runs)
   const stageNames = [
-    'preflight',
-    'code-scan',
-    'explore',
-    'test',
+    'progress-init',
+    'prd-parsing',
+    'code-analysis',
+    'exploration',
+    'form-testing',
     'responsive',
-    'aggregate',
-    'verify',
-    'compare',
-    'report',
+    'finding-quality',
+    'verification',
+    'report-generation',
   ];
 
   // Initialize all stages to pending
@@ -168,7 +200,6 @@ export function initProgress(auditDir: string, config: AuditConfig): ProgressSta
   };
 
   // Write progress.json
-  const progressPath = getProgressPath(auditDir);
   fs.writeFileSync(progressPath, JSON.stringify(state, null, 2), 'utf-8');
 
   // Write progress.md
